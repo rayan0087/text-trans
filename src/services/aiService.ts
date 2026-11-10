@@ -13,6 +13,17 @@ export interface AIResponse {
 }
 
 /**
+ * Detect AI provider from API key format
+ */
+export function detectProviderFromKey(apiKey: string): AIProvider | null {
+  const trimmed = apiKey.trim();
+  if (trimmed.startsWith('gsk_')) return 'groq';
+  if (trimmed.startsWith('AIzaSy')) return 'gemini';
+  if (trimmed.startsWith('sk-') && !trimmed.startsWith('gsk_')) return 'openai';
+  return null;
+}
+
+/**
  * Convert Blob to Base64 (without data: prefix)
  */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -29,37 +40,102 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Call Google Gemini API (Text)
+ * Call Google Gemini API (Text) with version & model fallbacks
  */
 async function callGemini(apiKey: string, prompt: string, model: string = 'gemini-1.5-flash'): Promise<string> {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const attempts = [
+    { ver: 'v1beta', model: model },
+    { ver: 'v1beta', model: 'gemini-1.5-flash-latest' },
+    { ver: 'v1beta', model: 'gemini-2.0-flash' },
+    { ver: 'v1', model: 'gemini-1.5-flash' },
+  ];
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [{ text: prompt }],
-        },
-      ],
-      generationConfig: {
-        temperature: 0.3,
-      },
-    }),
-  });
+  let lastError = '';
+  for (const attempt of attempts) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/${attempt.ver}/models/${attempt.model}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [{ text: prompt }],
+            },
+          ],
+          generationConfig: {
+            temperature: 0.3,
+          },
+        }),
+      });
 
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || `Gemini API error: ${response.status} ${response.statusText}`);
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return text.trim();
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        lastError = errorData.error?.message || `${response.status} ${response.statusText}`;
+      }
+    } catch (e: any) {
+      lastError = e.message;
+    }
   }
 
-  const data = await response.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) {
-    throw new Error('Tidak ada respon teks dari Gemini.');
+  throw new Error(lastError || 'Gagal memproses permintaan teks dengan Gemini.');
+}
+
+/**
+ * Call Gemini Audio Multimodal with fallbacks
+ */
+async function callGeminiAudio(apiKey: string, base64Audio: string, mimeType: string): Promise<string> {
+  const attempts = [
+    { ver: 'v1beta', model: 'gemini-1.5-flash' },
+    { ver: 'v1beta', model: 'gemini-1.5-flash-latest' },
+    { ver: 'v1beta', model: 'gemini-2.0-flash' },
+    { ver: 'v1', model: 'gemini-1.5-flash' },
+  ];
+
+  let lastError = '';
+  for (const attempt of attempts) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/${attempt.ver}/models/${attempt.model}:generateContent?key=${apiKey}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: mimeType || 'audio/webm',
+                    data: base64Audio,
+                  },
+                },
+                {
+                  text: 'Tolong transkripsikan audio percakapan ini ke dalam teks secara sangat akurat. Pertahankan istilah teknis/asing (seperti rework, DNS, SMS, database, deploy, dsb) sesuai konteks percakapan. Berikan tanda baca yang lengkap dan huruf kapital yang benar. Keluarkan HANYA teks hasil transkripsinya saja tanpa kata pengantar atau penutup apapun.',
+                },
+              ],
+            },
+          ],
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text) return text.trim();
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        lastError = errorData.error?.message || `${response.status} ${response.statusText}`;
+      }
+    } catch (e: any) {
+      lastError = e.message;
+    }
   }
-  return text.trim();
+
+  throw new Error(lastError || 'Gagal memproses audio dengan Gemini.');
 }
 
 /**
@@ -123,10 +199,12 @@ export async function transcribeAudio(
     };
   }
 
-  try {
-    const langCode = language.startsWith('id') ? 'id' : 'en';
+  // Auto detect provider if mismatched
+  const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
+  const langCode = language.startsWith('id') ? 'id' : 'en';
 
-    if (settings.provider === 'groq') {
+  try {
+    if (provider === 'groq') {
       const formData = new FormData();
       formData.append('file', audioBlob, 'audio.webm');
       formData.append('model', 'whisper-large-v3-turbo');
@@ -148,7 +226,7 @@ export async function transcribeAudio(
 
       const data = await response.json();
       return { success: true, result: data.text?.trim() };
-    } else if (settings.provider === 'openai') {
+    } else if (provider === 'openai') {
       const formData = new FormData();
       formData.append('file', audioBlob, 'audio.webm');
       formData.append('model', 'whisper-1');
@@ -169,41 +247,10 @@ export async function transcribeAudio(
 
       const data = await response.json();
       return { success: true, result: data.text?.trim() };
-    } else if (settings.provider === 'gemini') {
-      // Direct Audio transcription with Gemini 1.5 Flash
+    } else if (provider === 'gemini') {
       const base64Audio = await blobToBase64(audioBlob);
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${settings.apiKey.trim()}`;
-
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  inlineData: {
-                    mimeType: audioBlob.type || 'audio/webm',
-                    data: base64Audio,
-                  },
-                },
-                {
-                  text: 'Tolong transkripsikan audio ini ke dalam teks secara sangat akurat dan pertahankan istilah teknis/asing (seperti rework, DNS, SMS, meeting, server, dsb) sesuai konteks percakapan. Berikan tanda baca yang lengkap dan huruf kapital yang benar. Keluarkan HANYA teks hasil transkripsinya saja tanpa kata pengantar atau penutup apapun.',
-                },
-              ],
-            },
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error?.message || `Gemini Audio error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      return { success: true, result: text?.trim() };
+      const text = await callGeminiAudio(settings.apiKey.trim(), base64Audio, audioBlob.type || 'audio/webm');
+      return { success: true, result: text };
     }
 
     return {
@@ -240,6 +287,9 @@ export async function executeAITask(
     };
   }
 
+  // Auto detect provider if mismatched
+  const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
+
   let promptInstruction = '';
   if (taskType === 'speakers') {
     promptInstruction = `Kamu adalah asisten analisis transkrip percakapan tingkat tinggi. Tugasmu adalah menganalisis transkrip percakapan berikut dan memisahkan setiap giliran bicara pembicara (Speaker Diarization):
@@ -273,25 +323,25 @@ export async function executeAITask(
 
   try {
     let resultText = '';
-    if (settings.provider === 'gemini') {
+    if (provider === 'gemini') {
       const model = settings.customModel || 'gemini-1.5-flash';
       resultText = await callGemini(settings.apiKey.trim(), fullPrompt, model);
-    } else if (settings.provider === 'groq') {
+    } else if (provider === 'groq') {
       const model = settings.customModel || 'llama-3.3-70b-versatile';
       resultText = await callOpenAICompatible(
         'https://api.groq.com/openai/v1/chat/completions',
         settings.apiKey.trim(),
         model,
-        'Kamu adalah asisten cerdas pemrosesan transkrip.',
+        'Kamu adalah asisten cerdas pemrosesan transkrip dialog.',
         fullPrompt
       );
-    } else if (settings.provider === 'openai') {
+    } else if (provider === 'openai') {
       const model = settings.customModel || 'gpt-4o-mini';
       resultText = await callOpenAICompatible(
         'https://api.openai.com/v1/chat/completions',
         settings.apiKey.trim(),
         model,
-        'Kamu adalah asisten cerdas pemrosesan transkrip.',
+        'Kamu adalah asisten cerdas pemrosesan transkrip dialog.',
         fullPrompt
       );
     }

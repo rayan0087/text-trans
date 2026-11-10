@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Key, ShieldCheck, ExternalLink, Save, CheckCircle2 } from 'lucide-react';
-import { type AIProvider, type AISettings } from '../services/aiService';
+import { type AIProvider, type AISettings, detectProviderFromKey } from '../services/aiService';
 import { getSetting, setSetting } from '../db';
 
 interface SettingsModalProps {
@@ -32,10 +32,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     setCustomModel(saved.customModel || '');
   };
 
+  const handleKeyChange = (val: string) => {
+    setApiKey(val);
+    const detected = detectProviderFromKey(val);
+    if (detected && detected !== provider) {
+      setProvider(detected);
+    }
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    const actualProvider = detectProviderFromKey(apiKey) || provider;
     const settings: AISettings = {
-      provider,
+      provider: actualProvider,
       apiKey: apiKey.trim(),
       customModel: customModel.trim() || undefined,
     };
@@ -165,10 +174,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <input
               type="password"
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(e) => handleKeyChange(e.target.value)}
               placeholder={providerInfo.placeholder}
               className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-all font-mono"
             />
+            {detectProviderFromKey(apiKey) && (
+              <p className="text-[11px] text-emerald-600 font-medium mt-1">
+                ✓ Format kunci terdeteksi cocok dengan: <strong>{providerInfo.name}</strong>
+              </p>
+            )}
             <p className="text-[11px] text-slate-400 mt-1">
               Kosongkan jika hanya ingin menggunakan transkripsi standar tanpa fitur AI.
             </p>
