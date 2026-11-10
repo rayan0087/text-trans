@@ -181,22 +181,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
 
       {/* Editor Body */}
       <div ref={containerRef} className="flex-1 p-6 flex flex-col overflow-y-auto space-y-4">
-        {/* Live Interim Speech Preview at TOP */}
-        {interimContent && (
-          <div className="p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200/80 rounded-xl text-sm font-medium text-indigo-900 italic shadow-xs flex items-center gap-2.5 animate-fadeIn">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-600"></span>
-            </span>
-            <div className="flex-1">
-              <span className="text-[11px] font-bold text-indigo-600 block uppercase tracking-wider not-italic mb-0.5">
-                Sedang Mendengarkan (Live):
-              </span>
-              <span>{interimContent}</span>
-            </div>
-          </div>
-        )}
-
         {/* Main Content Area */}
         {viewMode === 'dialog' ? (
           <div className="flex-1 min-h-[220px] space-y-2.5">
