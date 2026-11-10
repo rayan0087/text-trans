@@ -12,6 +12,73 @@ export interface AIResponse {
   error?: string;
 }
 
+export const DEFAULT_MODELS: Record<AIProvider, string[]> = {
+  groq: [
+    'llama-3.3-70b-versatile',
+    'llama-3.1-8b-instant',
+    'llama-3.1-70b-versatile',
+    'mixtral-8x7b-32768',
+    'whisper-large-v3-turbo',
+  ],
+  gemini: [
+    'gemini-1.5-flash',
+    'gemini-1.5-flash-latest',
+    'gemini-1.5-pro',
+    'gemini-2.0-flash',
+  ],
+  openai: [
+    'gpt-4o-mini',
+    'gpt-4o',
+    'gpt-3.5-turbo',
+    'whisper-1',
+  ],
+};
+
+/**
+ * Fetch available models dynamically from provider API
+ */
+export async function fetchAvailableModels(provider: AIProvider, apiKey: string): Promise<string[]> {
+  const cleanKey = apiKey.trim();
+  if (!cleanKey) return DEFAULT_MODELS[provider];
+
+  try {
+    if (provider === 'groq') {
+      const res = await fetch('https://api.groq.com/openai/v1/models', {
+        headers: { Authorization: `Bearer ${cleanKey}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const ids: string[] = (data.data || []).map((m: any) => m.id);
+        if (ids.length > 0) return ids.sort();
+      }
+    } else if (provider === 'gemini') {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${cleanKey}`);
+      if (res.ok) {
+        const data = await res.json();
+        const ids: string[] = (data.models || [])
+          .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+          .map((m: any) => m.name.replace(/^models\//, ''));
+        if (ids.length > 0) return ids.sort();
+      }
+    } else if (provider === 'openai') {
+      const res = await fetch('https://api.openai.com/v1/models', {
+        headers: { Authorization: `Bearer ${cleanKey}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const ids: string[] = (data.data || [])
+          .map((m: any) => m.id)
+          .filter((id: string) => id.startsWith('gpt-') || id.includes('whisper'));
+        if (ids.length > 0) return ids.sort();
+      }
+    }
+  } catch (err) {
+    console.warn('Error fetching dynamic models, using fallback list:', err);
+  }
+
+  return DEFAULT_MODELS[provider];
+}
+
 /**
  * Detect AI provider from API key format
  */
@@ -327,14 +394,38 @@ export async function executeAITask(
       const model = settings.customModel || 'gemini-1.5-flash';
       resultText = await callGemini(settings.apiKey.trim(), fullPrompt, model);
     } else if (provider === 'groq') {
-      const model = settings.customModel || 'llama-3.3-70b-versatile';
-      resultText = await callOpenAICompatible(
-        'https://api.groq.com/openai/v1/chat/completions',
-        settings.apiKey.trim(),
-        model,
-        'Kamu adalah asisten cerdas pemrosesan transkrip dialog.',
-        fullPrompt
-      );
+      const candidates = [
+        settings.customModel || 'llama-3.1-8b-instant',
+        'llama-3.1-8b-instant',
+        'llama-3.1-70b-versatile',
+        'llama-3.3-70b-versatile',
+        'mixtral-8x7b-32768',
+      ];
+      const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
+      let groqErr = '';
+      for (const m of uniqueCandidates) {
+        try {
+          resultText = await callOpenAICompatible(
+            'https://api.groq.com/openai/v1/chat/completions',
+            settings.apiKey.trim(),
+            m,
+            'Kamu adalah asisten cerdas pemrosesan transkrip dialog.',
+            fullPrompt
+          );
+          if (resultText) break;
+        } catch (e: any) {
+          groqErr = e.message;
+          if (
+            e.message?.includes('does not exist') ||
+            e.message?.includes('model_not_found') ||
+            e.message?.includes('404')
+          ) {
+            continue;
+          }
+          throw e;
+        }
+      }
+      if (!resultText) throw new Error(groqErr || 'Gagal memproses dengan model Groq.');
     } else if (provider === 'openai') {
       const model = settings.customModel || 'gpt-4o-mini';
       resultText = await callOpenAICompatible(

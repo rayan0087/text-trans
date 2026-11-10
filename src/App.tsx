@@ -354,7 +354,10 @@ export function App() {
             <PanelLeft className="w-4 h-4 text-indigo-600" />
             <span>Riwayat Transkrip</span>
           </button>
-          <span className="text-xs font-bold text-slate-800">Transkrip Kilat</span>
+          <div className="flex items-center gap-2">
+            <img src="/favicon.svg" alt="Logo" className="w-5 h-5 rounded-md" />
+            <span className="text-xs font-bold text-slate-800">Transkrip Kilat</span>
+          </div>
         </div>
 
         {/* 1. Recording Controls Bar with Engine Toggle */}
