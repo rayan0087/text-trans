@@ -1,5 +1,5 @@
-import React from 'react';
-import { Mic, Pause, Play, Square, Globe2, AlertTriangle, Sparkles, Zap, Loader2 } from 'lucide-react';
+import React, { useRef } from 'react';
+import { Mic, Pause, Play, Square, Globe2, AlertTriangle, Sparkles, Zap, Loader2, Upload } from 'lucide-react';
 import { type SpeechState } from '../services/speechRecognition';
 import { AudioVisualizer } from './AudioVisualizer';
 import { formatDuration } from '../services/exportService';
@@ -19,6 +19,8 @@ interface RecordingControlsProps {
   engine: TranscriptionEngine;
   onEngineChange: (engine: TranscriptionEngine) => void;
   isTranscribingWhisper: boolean;
+  onUploadAudio?: (file: File) => void;
+  isUploadingAudio?: boolean;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -34,7 +36,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   engine,
   onEngineChange,
   isTranscribingWhisper,
+  onUploadAudio,
+  isUploadingAudio = false,
 }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onUploadAudio) {
+      onUploadAudio(file);
+    }
+    if (e.target) e.target.value = '';
+  };
   if (!isSupported && engine === 'browser') {
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3 text-amber-800 text-xs">
@@ -123,14 +136,39 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
       {/* Right side: Action Buttons & Language */}
       <div className="flex items-center gap-2.5">
         {speechState === 'idle' && (
-          <button
-            onClick={onStart}
-            disabled={isTranscribingWhisper}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 hover:shadow-rose-300 transition-all active:scale-95 disabled:opacity-50"
-          >
-            <Mic className="w-4 h-4" />
-            <span>Mulai Rekam</span>
-          </button>
+          <>
+            <button
+              onClick={onStart}
+              disabled={isTranscribingWhisper || isUploadingAudio}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 hover:shadow-rose-300 transition-all active:scale-95 disabled:opacity-50"
+            >
+              <Mic className="w-4 h-4" />
+              <span>Mulai Rekam</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isTranscribingWhisper || isUploadingAudio}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 shadow-xs"
+              title="Unggah file rekaman audio (.mp3, .wav, .m4a, .webm, .mp4, dll) untuk ditranskripsi"
+            >
+              {isUploadingAudio ? (
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+              ) : (
+                <Upload className="w-4 h-4 text-indigo-600" />
+              )}
+              <span>{isUploadingAudio ? 'Memproses...' : 'Unggah Audio'}</span>
+            </button>
+
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileChange}
+              accept="audio/*,video/mp4,video/webm,.mp3,.wav,.m4a,.ogg,.webm,.mp4"
+              className="hidden"
+            />
+          </>
         )}
 
         {speechState === 'recording' && (

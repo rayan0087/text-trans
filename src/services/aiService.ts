@@ -291,10 +291,17 @@ export async function transcribeAudio(
   const contextTail = contextPrompt && contextPrompt.trim() ? ` Konteks sebelumnya: ${contextPrompt.slice(-200)}` : '';
   const finalPrompt = `${BASE_SCIENTIFIC_PRIMER}${contextTail}`.slice(-440);
 
+  const fileName = (audioBlob as any).name || 
+    (audioBlob.type?.includes('mp3') ? 'audio.mp3' :
+     audioBlob.type?.includes('wav') ? 'audio.wav' :
+     audioBlob.type?.includes('m4a') ? 'audio.m4a' :
+     audioBlob.type?.includes('ogg') ? 'audio.ogg' :
+     audioBlob.type?.includes('mp4') ? 'audio.mp4' : 'audio.webm');
+
   try {
     if (provider === 'groq') {
       const formData = new FormData();
-      formData.append('file', audioBlob, 'audio.webm');
+      formData.append('file', audioBlob, fileName);
       formData.append('model', 'whisper-large-v3-turbo');
       formData.append('language', langCode);
       formData.append('response_format', 'json');
@@ -318,7 +325,7 @@ export async function transcribeAudio(
       return { success: true, result: formatIntoSentenceLines(data.text?.trim() || '') };
     } else if (provider === 'openai') {
       const formData = new FormData();
-      formData.append('file', audioBlob, 'audio.webm');
+      formData.append('file', audioBlob, fileName);
       formData.append('model', 'whisper-1');
       formData.append('language', langCode);
       formData.append('temperature', '0');
@@ -341,7 +348,8 @@ export async function transcribeAudio(
       return { success: true, result: formatIntoSentenceLines(data.text?.trim() || '') };
     } else if (provider === 'gemini') {
       const base64Audio = await blobToBase64(audioBlob);
-      const text = await callGeminiAudio(settings.apiKey.trim(), base64Audio, audioBlob.type || 'audio/webm');
+      const mime = audioBlob.type || 'audio/webm';
+      const text = await callGeminiAudio(settings.apiKey.trim(), base64Audio, mime);
       return { success: true, result: formatIntoSentenceLines(text || '') };
     }
 

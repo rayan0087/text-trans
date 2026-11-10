@@ -9,7 +9,7 @@ import { RecordingControls, type TranscriptionEngine } from './components/Record
 import { TranscriptEditor } from './components/TranscriptEditor';
 import { ExportToolbar } from './components/ExportToolbar';
 import { SettingsModal } from './components/SettingsModal';
-import { PanelLeft } from 'lucide-react';
+import { PanelLeft, Loader2 } from 'lucide-react';
 
 export function App() {
   // Database Live Query
@@ -30,6 +30,8 @@ export function App() {
   const [speechState, setSpeechState] = useState<SpeechState>('idle');
   const [isSupported, setIsSupported] = useState(true);
   const [isTranscribingWhisper, setIsTranscribingWhisper] = useState(false);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [uploadStatusMessage, setUploadStatusMessage] = useState('');
 
   // Service References
   const speechServiceRef = useRef<SpeechService | null>(null);
@@ -371,6 +373,70 @@ export function App() {
     speechServiceRef.current?.setLanguage(newLang);
   };
 
+  // Upload Audio File Transcription Handler
+  const handleUploadAudio = async (file: File) => {
+    // 1. Check file size (max 25MB for Groq & OpenAI Whisper)
+    const maxSizeBytes = 25 * 1024 * 1024;
+    if (file.size > maxSizeBytes) {
+      alert(
+        `Ukuran file "${file.name}" adalah ${(file.size / (1024 * 1024)).toFixed(1)} MB. Batas maksimal file audio untuk Whisper API adalah 25 MB.`
+      );
+      return;
+    }
+
+    // 2. Check API Key
+    const settings = await getSetting<AISettings>('ai_settings', {
+      provider: 'groq',
+      apiKey: '',
+    });
+    if (!settings.apiKey || !settings.apiKey.trim()) {
+      setIsSettingsOpen(true);
+      alert('Untuk mentranskripsi file rekaman audio, dibutuhkan API Key Whisper AI (Groq / OpenAI / Gemini). Silakan masukkan API Key Anda di Pengaturan.');
+      return;
+    }
+
+    // 3. Process transcription
+    try {
+      setIsUploadingAudio(true);
+      setUploadStatusMessage(`Mentranskripsi "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)... Harap tunggu sebentar.`);
+
+      const res = await transcribeAudio(settings, file, language);
+      if (res.success && typeof res.result === 'string' && res.result.trim()) {
+        const fileBaseName = file.name.replace(/\.[^/.]+$/, '');
+        const newTitle = `Transkrip - ${fileBaseName}`;
+        setTitle(newTitle);
+        setContent(res.result.trim());
+        contentRef.current = res.result.trim();
+        setEngine('whisper');
+        await persistTranscript({
+          title: newTitle,
+          content: res.result.trim(),
+        });
+      } else {
+        alert(`Gagal mentranskripsi file audio: ${res.error || 'Terjadi kesalahan saat memproses file audio.'}`);
+      }
+    } catch (err: any) {
+      console.error('Audio file upload transcription error:', err);
+      alert(`Terjadi kendala saat mentranskripsi: ${err.message}`);
+    } finally {
+      setIsUploadingAudio(false);
+      setUploadStatusMessage('');
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    if (speechState !== 'idle' || isUploadingAudio) return;
+    const file = e.dataTransfer.files?.[0];
+    if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/') || /\.(mp3|wav|m4a|ogg|webm|mp4)$/i.test(file.name))) {
+      handleUploadAudio(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+  };
+
   // Switch / Create New Session
   const handleNewTranscript = async () => {
     if (content.trim()) {
@@ -444,8 +510,12 @@ export function App() {
         onToggleOpen={() => setIsSidebarOpen((v) => !v)}
       />
 
-      {/* Main Workspace Area */}
-      <main className="flex-1 flex flex-col h-full overflow-hidden p-3 sm:p-5 lg:p-6 gap-3.5">
+      {/* Main Workspace Area with Drag and Drop Audio Support */}
+      <main
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+        className="flex-1 flex flex-col h-full overflow-hidden p-3 sm:p-5 lg:p-6 gap-3.5"
+      >
         {/* Top Bar on Mobile for sidebar trigger */}
         <div className="flex lg:hidden items-center justify-between bg-white px-4 py-2.5 rounded-2xl border border-slate-200 shadow-xs">
           <button
@@ -461,7 +531,20 @@ export function App() {
           </div>
         </div>
 
-        {/* 1. Recording Controls Bar with Engine Toggle */}
+        {/* Upload Audio File Progress Notification Banner */}
+        {isUploadingAudio && (
+          <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-3 rounded-2xl flex items-center justify-between gap-3 shadow-md animate-pulse">
+            <div className="flex items-center gap-3 text-xs sm:text-sm font-semibold">
+              <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin text-indigo-200 shrink-0" />
+              <span>{uploadStatusMessage || 'Sedang memproses dan mentranskripsi file rekaman audio...'}</span>
+            </div>
+            <span className="text-[11px] bg-white/20 px-2.5 py-1 rounded-lg font-mono uppercase font-bold shrink-0">
+              Whisper AI
+            </span>
+          </div>
+        )}
+
+        {/* 1. Recording Controls Bar with Engine Toggle & Audio Upload */}
         <RecordingControls
           speechState={speechState}
           durationSeconds={durationSeconds}
@@ -475,6 +558,8 @@ export function App() {
           engine={engine}
           onEngineChange={handleEngineChange}
           isTranscribingWhisper={isTranscribingWhisper}
+          onUploadAudio={handleUploadAudio}
+          isUploadingAudio={isUploadingAudio}
         />
 
         {/* 2. Main Live Transcript Editor with Sentence Dialog View */}
