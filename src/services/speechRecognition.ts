@@ -19,6 +19,8 @@ export class SpeechService {
   private isPaused: boolean = false;
   private language: string = 'id-ID';
   private currentInterim: string = '';
+  private lastInterimText: string = '';
+  private silenceTimer: any = null;
   private callbacks: SpeechCallbacks;
 
   constructor(callbacks: SpeechCallbacks, language: string = 'id-ID') {
@@ -30,6 +32,33 @@ export class SpeechService {
   public static isSupported(): boolean {
     const win = window as unknown as IWindow;
     return !!(win.SpeechRecognition || win.webkitSpeechRecognition);
+  }
+
+  private clearSilenceTimer(): void {
+    if (this.silenceTimer) {
+      clearTimeout(this.silenceTimer);
+      this.silenceTimer = null;
+    }
+  }
+
+  private flushInterim(): void {
+    this.clearSilenceTimer();
+    const textToCommit = this.currentInterim.trim();
+    if (textToCommit) {
+      this.currentInterim = '';
+      this.lastInterimText = '';
+      this.callbacks.onInterimTranscript('');
+      this.callbacks.onFinalTranscript(textToCommit);
+
+      // Reset recognition stream so Chrome flushes its internal resultIndex
+      if (this.isListening && !this.isPaused && this.recognition) {
+        try {
+          this.recognition.stop();
+        } catch (e) {
+          // ignore
+        }
+      }
+    }
   }
 
   private initRecognition(): void {
@@ -67,24 +96,38 @@ export class SpeechService {
         }
 
         if (finalStr.trim()) {
+          this.clearSilenceTimer();
           this.currentInterim = '';
+          this.lastInterimText = '';
+          this.callbacks.onInterimTranscript('');
           this.callbacks.onFinalTranscript(finalStr);
         }
-        
+
         if (interimStr.trim()) {
+          const trimmedInterim = interimStr.trim();
+          const isNewText = trimmedInterim !== this.lastInterimText.trim();
           this.currentInterim = interimStr;
-        } else {
+          this.callbacks.onInterimTranscript(interimStr);
+
+          // Reset silence timer ONLY when actual new speech words arrive
+          if (isNewText) {
+            this.lastInterimText = interimStr;
+            this.clearSilenceTimer();
+            this.silenceTimer = setTimeout(() => {
+              this.flushInterim();
+            }, 1200);
+          }
+        } else if (!finalStr.trim()) {
+          this.clearSilenceTimer();
           this.currentInterim = '';
+          this.lastInterimText = '';
+          this.callbacks.onInterimTranscript('');
         }
-        this.callbacks.onInterimTranscript(interimStr);
       };
 
       this.recognition.onerror = (event: any) => {
         // Ignorable errors like 'no-speech' or 'aborted'
-        if (event.error === 'no-speech') {
-          return;
-        }
-        if (event.error === 'aborted') {
+        if (event.error === 'no-speech' || event.error === 'aborted') {
           return;
         }
 
@@ -98,19 +141,28 @@ export class SpeechService {
       };
 
       this.recognition.onend = () => {
+        this.clearSilenceTimer();
+
         // If there was unfinalized speech when recognition ended/paused, finalize it so it is not lost
         if (this.currentInterim.trim()) {
-          this.callbacks.onFinalTranscript(this.currentInterim);
+          const text = this.currentInterim.trim();
           this.currentInterim = '';
+          this.lastInterimText = '';
+          this.callbacks.onInterimTranscript('');
+          this.callbacks.onFinalTranscript(text);
         }
 
-        // Auto restart if still supposed to be listening and not paused
+        // Auto restart after a micro-tick if still supposed to be listening and not paused
         if (this.isListening && !this.isPaused) {
-          try {
-            this.recognition.start();
-          } catch (e) {
-            // ignore start collisions
-          }
+          setTimeout(() => {
+            if (this.isListening && !this.isPaused && this.recognition) {
+              try {
+                this.recognition.start();
+              } catch (e) {
+                // ignore start collisions
+              }
+            }
+          }, 50);
         } else if (this.isPaused) {
           this.callbacks.onStateChange('paused');
         } else {
@@ -143,6 +195,9 @@ export class SpeechService {
 
     this.isListening = true;
     this.isPaused = false;
+    this.currentInterim = '';
+    this.lastInterimText = '';
+    this.clearSilenceTimer();
     try {
       this.recognition.start();
       this.callbacks.onStateChange('recording');
@@ -154,6 +209,14 @@ export class SpeechService {
   public pause(): void {
     if (!this.isListening || this.isPaused) return;
     this.isPaused = true;
+    this.clearSilenceTimer();
+    if (this.currentInterim.trim()) {
+      const text = this.currentInterim.trim();
+      this.currentInterim = '';
+      this.lastInterimText = '';
+      this.callbacks.onInterimTranscript('');
+      this.callbacks.onFinalTranscript(text);
+    }
     if (this.recognition) {
       try {
         this.recognition.stop();
@@ -166,6 +229,9 @@ export class SpeechService {
   public resume(): void {
     if (!this.isListening || !this.isPaused) return;
     this.isPaused = false;
+    this.currentInterim = '';
+    this.lastInterimText = '';
+    this.clearSilenceTimer();
     if (this.recognition) {
       try {
         this.recognition.start();
@@ -177,6 +243,14 @@ export class SpeechService {
   public stop(): void {
     this.isListening = false;
     this.isPaused = false;
+    this.clearSilenceTimer();
+    if (this.currentInterim.trim()) {
+      const text = this.currentInterim.trim();
+      this.currentInterim = '';
+      this.lastInterimText = '';
+      this.callbacks.onInterimTranscript('');
+      this.callbacks.onFinalTranscript(text);
+    }
     if (this.recognition) {
       try {
         this.recognition.stop();
