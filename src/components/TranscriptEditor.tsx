@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Check, FileText, CheckSquare, Trash, MessageSquare, Edit3 } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Check, FileText, CheckSquare, Trash, MessageSquare, Edit3, UserCheck } from 'lucide-react';
 
 interface TranscriptEditorProps {
   title: string;
@@ -27,6 +27,10 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   onClearAiActions,
 }) => {
   const [viewMode, setViewMode] = useState<'dialog' | 'raw'>('dialog');
+  const [editingSpeakerOld, setEditingSpeakerOld] = useState<string | null>(null);
+  const [editingSpeakerNew, setEditingSpeakerNew] = useState('');
+  
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
@@ -34,24 +38,78 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   // Split lines for dialog view
   const lines = content.split('\n').filter((l) => l.trim().length > 0);
 
+  // Auto-scroll when new text arrives while recording
+  useEffect(() => {
+    if (isRecording && containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [content, interimContent, isRecording]);
+
+  const handleRenameSpeaker = (oldName: string) => {
+    if (!editingSpeakerNew.trim() || editingSpeakerNew.trim() === oldName) {
+      setEditingSpeakerOld(null);
+      return;
+    }
+    const newName = editingSpeakerNew.trim();
+    // Replace all instances of [oldName] in the text
+    const escapedOld = oldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`\\[${escapedOld}\\]`, 'g');
+    const updated = content.replace(regex, `[${newName}]`);
+    onContentChange(updated);
+    setEditingSpeakerOld(null);
+    setEditingSpeakerNew('');
+  };
+
   // Helper to format line with speaker highlight if present
   const renderDialogLine = (line: string, index: number) => {
-    // Check if line matches speaker format like **[Pak Bagus]:** or [Pak Bagus]: or Pembicara A:
     const speakerRegex = /^(\*\*\[.*?\]\*\*|\*\[.*?\]\*|\[.*?\]|Pembicara\s+[A-Za-z0-9]+:?|Mas\s+\w+:?|Pak\s+\w+:?|Bu\s+\w+:?):?\s*(.*)$/i;
     const match = line.match(speakerRegex);
 
     if (match) {
       const speakerName = match[1].replace(/[*\[\]:]/g, '').trim();
       const speechText = match[2];
+      const isEditingThis = editingSpeakerOld === speakerName;
+
       return (
         <div
           key={index}
           className="border-l-[3px] border-sky-400 pl-3.5 py-1 text-slate-800 leading-relaxed transition-colors hover:bg-sky-50/40 rounded-r-lg group"
         >
-          <div className="flex items-center gap-2 mb-0.5">
-            <span className="text-xs font-bold text-sky-700 bg-sky-100/70 px-2 py-0.5 rounded-md">
-              {speakerName}
-            </span>
+          <div className="flex items-center gap-2 mb-1">
+            {isEditingThis ? (
+              <div className="flex items-center gap-1.5 bg-white border border-sky-300 p-1 rounded-lg shadow-xs">
+                <input
+                  type="text"
+                  value={editingSpeakerNew}
+                  onChange={(e) => setEditingSpeakerNew(e.target.value)}
+                  placeholder="Nama Pembicara..."
+                  className="text-xs font-semibold px-2 py-0.5 border border-slate-200 rounded outline-none focus:ring-1 focus:ring-sky-500 w-32"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleRenameSpeaker(speakerName);
+                    if (e.key === 'Escape') setEditingSpeakerOld(null);
+                  }}
+                />
+                <button
+                  onClick={() => handleRenameSpeaker(speakerName)}
+                  className="p-1 bg-sky-600 text-white rounded text-[10px] font-bold"
+                  title="Simpan nama"
+                >
+                  <UserCheck className="w-3 h-3" />
+                </button>
+              </div>
+            ) : (
+              <span
+                onClick={() => {
+                  setEditingSpeakerOld(speakerName);
+                  setEditingSpeakerNew(speakerName);
+                }}
+                className="text-xs font-bold text-sky-700 bg-sky-100/70 hover:bg-sky-200/80 px-2 py-0.5 rounded-md cursor-pointer transition-colors"
+                title="Klik untuk mengubah nama pembicara ini di seluruh transkrip"
+              >
+                {speakerName}
+              </span>
+            )}
           </div>
           <p className="text-[15px] text-slate-800">{speechText}</p>
         </div>
@@ -80,7 +138,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           className="text-lg font-bold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-600 focus:outline-none transition-colors w-full sm:w-auto flex-1 min-w-[200px]"
         />
 
-        {/* Word count, status, view toggle & Quick AI button at top */}
+        {/* Word count, status, view toggle */}
         <div className="flex items-center flex-wrap gap-2.5">
           <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
             <span className="flex items-center gap-1 text-emerald-600 font-medium">
@@ -122,7 +180,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
       </div>
 
       {/* Editor Body */}
-      <div className="flex-1 p-6 flex flex-col overflow-y-auto space-y-4">
+      <div ref={containerRef} className="flex-1 p-6 flex flex-col overflow-y-auto space-y-4">
         {/* Live Interim Speech Preview at TOP */}
         {interimContent && (
           <div className="p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200/80 rounded-xl text-sm font-medium text-indigo-900 italic shadow-xs flex items-center gap-2.5 animate-fadeIn">
@@ -148,7 +206,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
                 className="py-12 text-center text-slate-300 text-sm cursor-pointer hover:text-slate-400"
               >
                 {isRecording
-                  ? 'Sedang mendengarkan suara Anda... Setiap kalimat selesai akan otomatis turun ke baris baru.'
+                  ? 'Sedang merekam suara Anda... Begitu Anda jeda bicara, kalimat akurat Whisper akan otomatis muncul di sini.'
                   : 'Mulai bicara, teks Anda akan otomatis tertulis rapi per baris dengan garis di samping. Klik di sini untuk mengetik manual...'}
               </div>
             ) : (

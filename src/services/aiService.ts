@@ -263,7 +263,8 @@ export function formatIntoSentenceLines(rawText: string): string {
 export async function transcribeAudio(
   settings: AISettings,
   audioBlob: Blob,
-  language: string = 'id-ID'
+  language: string = 'id-ID',
+  contextPrompt?: string
 ): Promise<AIResponse> {
   if (!settings.apiKey || !settings.apiKey.trim()) {
     return {
@@ -290,6 +291,9 @@ export async function transcribeAudio(
       formData.append('model', 'whisper-large-v3-turbo');
       formData.append('language', langCode);
       formData.append('response_format', 'json');
+      if (contextPrompt && contextPrompt.trim()) {
+        formData.append('prompt', contextPrompt.slice(-250));
+      }
 
       const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
         method: 'POST',
@@ -311,6 +315,9 @@ export async function transcribeAudio(
       formData.append('file', audioBlob, 'audio.webm');
       formData.append('model', 'whisper-1');
       formData.append('language', langCode);
+      if (contextPrompt && contextPrompt.trim()) {
+        formData.append('prompt', contextPrompt.slice(-250));
+      }
 
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',

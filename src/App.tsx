@@ -43,9 +43,6 @@ export function App() {
   const contentRef = useRef(content);
   contentRef.current = content;
 
-  // Track initial content before current recording starts (to append Whisper accurately)
-  const previousContentBeforeRecordRef = useRef('');
-
   // Auto-save debouncing
   const saveTimeoutRef = useRef<any>(null);
 
@@ -68,7 +65,6 @@ export function App() {
       if (activeId) {
         await db.transcripts.update(activeId, recordData);
       } else {
-        // Only create new entry if there's actual content or user changed title
         if (recordData.content?.trim() || recordData.title !== 'Transkrip Baru' || recordData.durationSeconds! > 0) {
           const newId = await db.transcripts.add({
             title: recordData.title || 'Transkrip Baru',
@@ -87,12 +83,49 @@ export function App() {
     [activeId, title, durationSeconds, language, aiSummary, aiActionItems]
   );
 
-  // Check Web Speech API support & Initialize AudioRecorder
+  // Real-time Streaming Whisper Processor with Context Memory (Maestra Live-style)
+  const processStreamingWhisperChunk = useCallback(
+    async (chunkBlob: Blob) => {
+      const settings = await getSetting<AISettings>('ai_settings', {
+        provider: 'groq',
+        apiKey: '',
+      });
+      if (!settings.apiKey) return;
+
+      try {
+        setIsTranscribingWhisper(true);
+        // Pass previous sentences as contextPrompt to maintain terms consistency
+        const res = await transcribeAudio(settings, chunkBlob, language, contentRef.current);
+        setIsTranscribingWhisper(false);
+
+        if (res.success && typeof res.result === 'string') {
+          const resultText = res.result;
+          setContent((prev) => {
+            const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+            const updated = prev ? `${prev}${separator}${resultText}` : resultText;
+            contentRef.current = updated;
+            return updated;
+          });
+        }
+      } catch (e) {
+        setIsTranscribingWhisper(false);
+        console.warn('Streaming chunk transcription error:', e);
+      }
+    },
+    [language]
+  );
+
+  // Initialize Speech Services & Audio Recorder with Silence Detection
   useEffect(() => {
     setIsSupported(SpeechService.isSupported());
-    audioRecorderRef.current = new AudioRecorderService();
+    audioRecorderRef.current = new AudioRecorderService({
+      onChunkReady: (blob) => {
+        processStreamingWhisperChunk(blob);
+      },
+      silenceThresholdMs: 1200,
+      maxChunkDurationMs: 8000,
+    });
 
-    // Check if user already has an API key configured
     getSetting<AISettings>('ai_settings', { provider: 'groq', apiKey: '' }).then((saved) => {
       if (saved && saved.apiKey) {
         setEngine('whisper');
@@ -100,14 +133,13 @@ export function App() {
         setEngine('browser');
       }
     });
-  }, []);
+  }, [processStreamingWhisperChunk]);
 
-  // Initialize Speech Service for live real-time feedback
+  // Speech Recognition for live visual feedback
   useEffect(() => {
     speechServiceRef.current = new SpeechService(
       {
         onFinalTranscript: (text) => {
-          // If in browser mode, append text; if in whisper mode, live interim guides the user
           if (engine === 'browser') {
             setContent((prev) => {
               const trimmed = text.trim();
@@ -165,7 +197,6 @@ export function App() {
     };
   }, [content, title, durationSeconds, persistTranscript]);
 
-  // Handle Engine Switch with API Key verification
   const handleEngineChange = async (newEngine: TranscriptionEngine) => {
     if (newEngine === 'whisper') {
       const settings = await getSetting<AISettings>('ai_settings', {
@@ -194,7 +225,6 @@ export function App() {
         return;
       }
       try {
-        previousContentBeforeRecordRef.current = contentRef.current;
         await audioRecorderRef.current?.start();
       } catch (err: any) {
         alert(`Gagal mengakses mikrofon untuk perekaman audio: ${err.message}`);
@@ -227,31 +257,10 @@ export function App() {
 
     if (engine === 'whisper' && audioRecorderRef.current) {
       try {
-        setIsTranscribingWhisper(true);
-        const audioBlob = await audioRecorderRef.current.stop();
-        const settings = await getSetting<AISettings>('ai_settings', {
-          provider: 'groq',
-          apiKey: '',
-        });
-
-        // Transcribe directly via Whisper AI
-        const response = await transcribeAudio(settings, audioBlob, language);
-        setIsTranscribingWhisper(false);
-
-        if (response.success && response.result) {
-          const prev = previousContentBeforeRecordRef.current;
-          const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-          const finalUpdated = prev ? `${prev}${separator}${response.result}` : response.result;
-          setContent(finalUpdated);
-          contentRef.current = finalUpdated;
-          persistTranscript({ content: finalUpdated });
-        } else {
-          alert(`Catatan Whisper AI: ${response.error || 'Gagal memproses dengan Whisper'}. Teks browser tetap disimpan.`);
-          persistTranscript();
-        }
+        await audioRecorderRef.current.stop();
+        persistTranscript();
       } catch (err: any) {
-        setIsTranscribingWhisper(false);
-        console.error('Whisper transcription error:', err);
+        console.error('Audio recorder stop error:', err);
         persistTranscript();
       }
     } else {
