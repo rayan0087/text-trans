@@ -200,7 +200,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
         {/* Main Content Area */}
         {viewMode === 'dialog' ? (
           <div className="flex-1 min-h-[220px] space-y-2.5">
-            {lines.length === 0 ? (
+            {lines.length === 0 && !interimContent ? (
               <div
                 onClick={() => setViewMode('raw')}
                 className="py-12 text-center text-slate-300 text-sm cursor-pointer hover:text-slate-400"
@@ -210,7 +210,20 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
                   : 'Mulai bicara, teks Anda akan otomatis tertulis rapi per baris dengan garis di samping. Klik di sini untuk mengetik manual...'}
               </div>
             ) : (
-              lines.map((line, idx) => renderDialogLine(line, idx))
+              <>
+                {lines.map((line, idx) => renderDialogLine(line, idx))}
+                {interimContent && (
+                  <div className="border-l-[3px] border-amber-400 bg-amber-50/50 pl-3.5 py-1.5 rounded-r-lg text-slate-700 animate-pulse transition-all">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[10px] font-bold text-amber-700 bg-amber-100/90 px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wider">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping inline-block" />
+                        Bicara Aktif
+                      </span>
+                    </div>
+                    <p className="text-[15px] italic text-slate-600 leading-relaxed">&ldquo;{interimContent}&rdquo;</p>
+                  </div>
+                )}
+              </>
             )}
           </div>
         ) : (

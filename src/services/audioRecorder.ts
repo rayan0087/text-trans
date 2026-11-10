@@ -95,34 +95,48 @@ export class AudioRecorderService {
           if (!this.analyser || !this.mediaRecorder || this.mediaRecorder.state !== 'recording') return;
 
           this.analyser.getByteFrequencyData(dataArray);
-          // Calculate average volume energy
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
+          
+          // Focus analysis on the human voice frequency band (~120Hz to ~3400Hz, bins 2 to 38)
+          // to eliminate low-frequency rumbles (AC/mic bumps) and high-frequency noise
+          const minBin = 2;
+          const maxBin = Math.min(38, dataArray.length);
+          let voiceSum = 0;
+          for (let i = minBin; i < maxBin; i++) {
+            voiceSum += dataArray[i];
           }
-          const avgVolume = sum / dataArray.length;
+          const avgVoiceVolume = voiceSum / (maxBin - minBin);
 
           const now = Date.now();
           const chunkDuration = now - this.chunkStartTime;
 
-          // Sound threshold: volume > 10 considered speech
-          if (avgVolume > 10) {
+          // Sound threshold: avgVoiceVolume > 12 indicates active human speech
+          if (avgVoiceVolume > 12) {
             this.hasSpokenInCurrentChunk = true;
             this.lastSpokeTime = now;
           }
 
           const silenceDuration = now - this.lastSpokeTime;
 
-          // Condition 1: Speech pause detected (silence > 1.2s AND at least 2.5s of speech accumulated)
-          const isSpeechPause = this.hasSpokenInCurrentChunk && chunkDuration >= 2500 && silenceDuration >= (this.options.silenceThresholdMs || 1200);
+          // Condition 1: Natural sentence pause
+          // Trigger when user pauses for >= silenceThreshold (default 1100ms) AFTER having spoken for at least 2 seconds
+          const isNaturalPause = 
+            this.hasSpokenInCurrentChunk && 
+            chunkDuration >= 2000 && 
+            silenceDuration >= (this.options.silenceThresholdMs || 1100);
 
-          // Condition 2: Max chunk duration reached (8s) with speech
-          const isMaxDuration = this.hasSpokenInCurrentChunk && chunkDuration >= (this.options.maxChunkDurationMs || 8000);
+          // Condition 2: Max duration cap reached (default 8s) while speaking, to prevent lagging behind
+          const isMaxDuration = 
+            this.hasSpokenInCurrentChunk && 
+            chunkDuration >= (this.options.maxChunkDurationMs || 8000) &&
+            silenceDuration >= 400; // brief natural break within the speech
 
-          if ((isSpeechPause || isMaxDuration) && this.options.onChunkReady) {
+          // Condition 3: Hard limit (10s)
+          const isHardLimit = this.hasSpokenInCurrentChunk && chunkDuration >= 10000;
+
+          if ((isNaturalPause || isMaxDuration || isHardLimit) && this.options.onChunkReady) {
             this.sliceAndEmitCurrentChunk();
           }
-        }, 200);
+        }, 150);
       }
     } catch (err) {
       console.warn('AudioContext setup error (silence detection disabled):', err);
@@ -140,7 +154,8 @@ export class AudioRecorderService {
     this.chunkStartTime = Date.now();
     this.lastSpokeTime = Date.now();
 
-    if (chunkBlob.size > 2000 && this.options.onChunkReady) {
+    // Ensure audio chunk contains enough data (> 3000 bytes) to be valid
+    if (chunkBlob.size > 3000 && this.options.onChunkReady) {
       this.options.onChunkReady(chunkBlob);
     }
   }

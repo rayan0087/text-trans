@@ -284,6 +284,13 @@ export async function transcribeAudio(
   const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
   const langCode = language.startsWith('id') ? 'id' : 'en';
 
+  // Base prompt priming for Indonesian conversation, scientific terminology, tech jargon, and punctuation
+  const BASE_SCIENTIFIC_PRIMER =
+    'Transkripsi percakapan bahasa Indonesia formal dan kasual. Sangat akurat pada istilah sains, biologi, kedokteran, teknologi, komputer, internet, istilah bahasa Inggris, akronim, dan kata serapan (contoh: DNA, RNA, fotosintesis, algoritma, backend, frontend, API, server, database, deploy, rework, bug, bandwidth, CPU, GPU, DNS, localhost). Tanda baca lengkap dan rapi (titik, koma, huruf kapital).';
+
+  const contextTail = contextPrompt && contextPrompt.trim() ? ` Konteks sebelumnya: ${contextPrompt.slice(-200)}` : '';
+  const finalPrompt = `${BASE_SCIENTIFIC_PRIMER}${contextTail}`.slice(-440);
+
   try {
     if (provider === 'groq') {
       const formData = new FormData();
@@ -291,9 +298,8 @@ export async function transcribeAudio(
       formData.append('model', 'whisper-large-v3-turbo');
       formData.append('language', langCode);
       formData.append('response_format', 'json');
-      if (contextPrompt && contextPrompt.trim()) {
-        formData.append('prompt', contextPrompt.slice(-250));
-      }
+      formData.append('temperature', '0');
+      formData.append('prompt', finalPrompt);
 
       const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
         method: 'POST',
@@ -315,9 +321,8 @@ export async function transcribeAudio(
       formData.append('file', audioBlob, 'audio.webm');
       formData.append('model', 'whisper-1');
       formData.append('language', langCode);
-      if (contextPrompt && contextPrompt.trim()) {
-        formData.append('prompt', contextPrompt.slice(-250));
-      }
+      formData.append('temperature', '0');
+      formData.append('prompt', finalPrompt);
 
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
