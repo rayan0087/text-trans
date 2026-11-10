@@ -29,9 +29,9 @@ export function App() {
   const [engine, setEngine] = useState<TranscriptionEngine>('whisper');
   const [speechState, setSpeechState] = useState<SpeechState>('idle');
   const [isSupported, setIsSupported] = useState(true);
-  const [isTranscribingWhisper, setIsTranscribingWhisper] = useState(false);
   const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const [uploadStatusMessage, setUploadStatusMessage] = useState('');
+  const isTranscribingWhisper = isUploadingAudio;
 
   // Service References
   const speechServiceRef = useRef<SpeechService | null>(null);
@@ -89,48 +89,10 @@ export function App() {
     [activeId, title, durationSeconds, language, aiSummary, aiActionItems]
   );
 
-  // Real-time Streaming Whisper Processor with Context Memory (Maestra Live-style)
-  const processStreamingWhisperChunk = useCallback(
-    async (chunkBlob: Blob) => {
-      const settings = await getSetting<AISettings>('ai_settings', {
-        provider: 'groq',
-        apiKey: '',
-      });
-      if (!settings.apiKey) return;
-
-      try {
-        setIsTranscribingWhisper(true);
-        // Pass previous sentences as contextPrompt to maintain terms consistency
-        const res = await transcribeAudio(settings, chunkBlob, language, contentRef.current);
-        setIsTranscribingWhisper(false);
-
-        if (res.success && typeof res.result === 'string') {
-          const resultText = res.result;
-          setContent((prev) => {
-            const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-            const updated = prev ? `${prev}${separator}${resultText}` : resultText;
-            contentRef.current = updated;
-            return updated;
-          });
-        }
-      } catch (e) {
-        setIsTranscribingWhisper(false);
-        console.warn('Streaming chunk transcription error:', e);
-      }
-    },
-    [language]
-  );
-
-  // Initialize Speech Services & Audio Recorder with Silence Detection
+  // Initialize Speech Services & Audio Recorder
   useEffect(() => {
     setIsSupported(SpeechService.isSupported());
-    audioRecorderRef.current = new AudioRecorderService({
-      onChunkReady: (blob) => {
-        processStreamingWhisperChunk(blob);
-      },
-      silenceThresholdMs: 1200,
-      maxChunkDurationMs: 8000,
-    });
+    audioRecorderRef.current = new AudioRecorderService();
 
     getSetting<AISettings>('ai_settings', { provider: 'groq', apiKey: '' }).then((saved) => {
       if (saved && saved.apiKey) {
@@ -139,71 +101,22 @@ export function App() {
         setEngine('browser');
       }
     });
-  }, [processStreamingWhisperChunk]);
+  }, []);
 
-  // Commit an utterance into the transcript (instantly visible, then refined via Whisper in background)
+  // Commit an utterance into the transcript (strictly and faithfully records what was in "Bicara Aktif")
   const commitUtterance = useCallback(
-    async (text: string) => {
+    (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      const tempLine = trimmed;
-
-      if (engine === 'browser') {
-        setContent((prev) => {
-          const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-          const updated = prev ? `${prev}${separator}${trimmed}` : trimmed;
-          contentRef.current = updated;
-          return updated;
-        });
-      } else if (engine === 'whisper') {
-        // 1. Immediately append the text to editor so it is NEVER lost or dropped
-        setContent((prev) => {
-          const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-          const updated = prev ? `${prev}${separator}${tempLine}` : tempLine;
-          contentRef.current = updated;
-          return updated;
-        });
-
-        // 2. Cut audio utterance and refine via Whisper AI for scientific/technical precision & punctuation
-        if (audioRecorderRef.current) {
-          try {
-            setIsTranscribingWhisper(true);
-            const audioBlob = await audioRecorderRef.current.cutUtterance();
-            if (audioBlob) {
-              const settings = await getSetting<AISettings>('ai_settings', {
-                provider: 'groq',
-                apiKey: '',
-              });
-              if (settings.apiKey) {
-                const res = await transcribeAudio(settings, audioBlob, language, contentRef.current);
-                if (res.success && typeof res.result === 'string' && res.result.trim()) {
-                  const refined = res.result.trim();
-                  setContent((prev) => {
-                    if (prev.endsWith(tempLine)) {
-                      const updated = prev.slice(0, prev.length - tempLine.length) + refined;
-                      contentRef.current = updated;
-                      return updated;
-                    } else if (prev.includes(tempLine)) {
-                      const lastIndex = prev.lastIndexOf(tempLine);
-                      const updated = prev.slice(0, lastIndex) + refined + prev.slice(lastIndex + tempLine.length);
-                      contentRef.current = updated;
-                      return updated;
-                    }
-                    return prev;
-                  });
-                }
-              }
-            }
-          } catch (err) {
-            console.warn('Whisper refinement error:', err);
-          } finally {
-            setIsTranscribingWhisper(false);
-          }
-        }
-      }
+      setContent((prev) => {
+        const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+        const updated = prev ? `${prev}${separator}${trimmed}` : trimmed;
+        contentRef.current = updated;
+        return updated;
+      });
     },
-    [engine, language]
+    []
   );
 
   // Speech Recognition for live visual feedback
