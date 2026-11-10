@@ -291,6 +291,7 @@ export function App() {
           aiActionItems={aiActionItems}
           onClearAiSummary={() => setAiSummary(undefined)}
           onClearAiActions={() => setAiActionItems(undefined)}
+          onOpenAiAssistant={() => setIsAiModalOpen(true)}
         />
 
         {/* 3. Export & Action Toolbar */}

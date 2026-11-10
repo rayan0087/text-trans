@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, FileText, CheckSquare, Trash } from 'lucide-react';
+import { Check, FileText, CheckSquare, Trash, Sparkles } from 'lucide-react';
 
 interface TranscriptEditorProps {
   title: string;
@@ -12,6 +12,7 @@ interface TranscriptEditorProps {
   aiActionItems?: string;
   onClearAiSummary?: () => void;
   onClearAiActions?: () => void;
+  onOpenAiAssistant?: () => void;
 }
 
 export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
@@ -25,6 +26,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   aiActionItems,
   onClearAiSummary,
   onClearAiActions,
+  onOpenAiAssistant,
 }) => {
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
@@ -32,7 +34,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   return (
     <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
       {/* Editor Header / Title bar */}
-      <div className="px-6 py-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/40">
+      <div className="px-6 py-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3 bg-slate-50/50">
         <input
           type="text"
           value={title}
@@ -41,22 +43,50 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           className="text-lg font-bold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-600 focus:outline-none transition-colors w-full sm:w-auto flex-1 min-w-[200px]"
         />
 
-        {/* Word count & auto-save badge */}
-        <div className="flex items-center gap-3 text-xs text-slate-400">
-          <span className="flex items-center gap-1 text-emerald-600 font-medium">
-            <Check className="w-3.5 h-3.5" />
-            <span>Tersimpan di IndexedDB</span>
-          </span>
-          <span className="text-slate-300">•</span>
-          <span>{wordCount} kata</span>
-          <span className="text-slate-300">•</span>
-          <span>{charCount} karakter</span>
+        {/* Word count, status, and Quick AI button at top */}
+        <div className="flex items-center gap-3">
+          <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+            <span className="flex items-center gap-1 text-emerald-600 font-medium">
+              <Check className="w-3.5 h-3.5" />
+              <span>Tersimpan</span>
+            </span>
+            <span className="text-slate-300">•</span>
+            <span>{wordCount} kata</span>
+            <span className="text-slate-300">•</span>
+            <span>{charCount} karakter</span>
+          </div>
+
+          {onOpenAiAssistant && (
+            <button
+              onClick={onOpenAiAssistant}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-all active:scale-95"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Asisten AI</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Editor Body */}
-      <div className="flex-1 p-6 flex flex-col overflow-y-auto space-y-6">
-        {/* Main Text Area with live interim feedback */}
+      <div className="flex-1 p-6 flex flex-col overflow-y-auto space-y-4">
+        {/* Live Interim Speech Preview moved to TOP */}
+        {interimContent && (
+          <div className="p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200/80 rounded-xl text-sm font-medium text-indigo-900 italic shadow-xs flex items-center gap-2.5 animate-fadeIn">
+            <span className="relative flex h-2.5 w-2.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-indigo-600"></span>
+            </span>
+            <div className="flex-1">
+              <span className="text-[11px] font-bold text-indigo-600 block uppercase tracking-wider not-italic mb-0.5">
+                Sedang Mendengarkan (Live):
+              </span>
+              <span>{interimContent}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Main Text Area */}
         <div className="relative flex-1 min-h-[220px]">
           <textarea
             value={content}
@@ -68,14 +98,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
             }
             className="w-full h-full min-h-[220px] resize-none text-base text-slate-800 leading-relaxed font-sans placeholder:text-slate-300 focus:outline-none bg-transparent"
           />
-
-          {/* Interim floating bubble/text at the end if recording */}
-          {interimContent && (
-            <div className="mt-2 p-2.5 bg-indigo-50/70 border border-indigo-100 rounded-xl text-sm text-indigo-700 italic animate-pulse flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-indigo-500 animate-ping"></span>
-              <span>{interimContent}</span>
-            </div>
-          )}
         </div>
 
         {/* AI Attachments Section (If any) */}
