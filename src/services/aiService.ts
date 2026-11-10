@@ -223,7 +223,7 @@ export async function transcribeAudio(
  */
 export async function executeAITask(
   settings: AISettings,
-  taskType: 'polish' | 'summarize' | 'actions',
+  taskType: 'polish' | 'summarize' | 'actions' | 'speakers',
   transcriptText: string
 ): Promise<AIResponse> {
   if (!settings.apiKey || !settings.apiKey.trim()) {
@@ -241,7 +241,17 @@ export async function executeAITask(
   }
 
   let promptInstruction = '';
-  if (taskType === 'polish') {
+  if (taskType === 'speakers') {
+    promptInstruction = `Kamu adalah asisten analisis transkrip percakapan tingkat tinggi. Tugasmu adalah menganalisis transkrip percakapan berikut dan memisahkan setiap giliran bicara pembicara (Speaker Diarization):
+1. Deteksi pergantian orang yang berbicara (dialog tanya-jawab, tanggapan singkat seperti 'Oh oke', 'Heeh itu...', atau peralihan topik).
+2. Deteksi nama pembicara jika ada nama orang yang dipanggil atau disebutkan dalam konteks percakapan (misalnya 'Pak Bagus', 'Bu Ayu', 'Mas Arya', dll).
+3. Jika nama orang belum bisa dipastikan 100%, gunakan label pembicara yang konsisten seperti:
+   **[Pembicara A]** dan **[Pembicara B]** (atau Pembicara 1, Pembicara 2).
+4. Tuliskan setiap giliran bicara di baris baru terpisah dengan format:
+   **[Nama Pembicara]:** Kalimat yang diucapkan...
+5. Perbaiki tanda baca agar kalimatnya rapi dan enak dibaca.
+6. JANGAN tambahkan penjelasan atau kata pengantar apapun, langsung keluarkan hasil dialog yang sudah dipisah.`;
+  } else if (taskType === 'polish') {
     promptInstruction = `Kamu adalah asisten editor transkrip profesional. Tugasmu adalah merapikan transkrip suara lisan berikut:
 1. Tambahkan tanda baca yang tepat (titik, koma, tanda tanya, huruf kapital).
 2. Perbaiki kesalahan pengetikan lisan (typo / slip of tongue, seperti 'rewok' menjadi 'rework') dengan memahami konteks percakapan secara cerdas.

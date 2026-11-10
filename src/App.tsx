@@ -101,8 +101,10 @@ export function App() {
       {
         onFinalTranscript: (text) => {
           setContent((prev) => {
-            const separator = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? ' ' : '';
-            const updated = prev + separator + text;
+            const trimmed = text.trim();
+            if (!trimmed) return prev;
+            const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+            const updated = prev + separator + trimmed;
             contentRef.current = updated;
             return updated;
           });

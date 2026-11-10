@@ -1,5 +1,5 @@
-import React from 'react';
-import { Check, FileText, CheckSquare, Trash, Sparkles } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, FileText, CheckSquare, Trash, Sparkles, MessageSquare, Edit3 } from 'lucide-react';
 
 interface TranscriptEditorProps {
   title: string;
@@ -28,8 +28,47 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   onClearAiActions,
   onOpenAiAssistant,
 }) => {
+  const [viewMode, setViewMode] = useState<'dialog' | 'raw'>('dialog');
+
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
+
+  // Split lines for dialog view
+  const lines = content.split('\n').filter((l) => l.trim().length > 0);
+
+  // Helper to format line with speaker highlight if present
+  const renderDialogLine = (line: string, index: number) => {
+    // Check if line matches speaker format like **[Pak Bagus]:** or [Pak Bagus]: or Pembicara A:
+    const speakerRegex = /^(\*\*\[.*?\]\*\*|\*\[.*?\]\*|\[.*?\]|Pembicara\s+[A-Za-z0-9]+:?|Mas\s+\w+:?|Pak\s+\w+:?|Bu\s+\w+:?):?\s*(.*)$/i;
+    const match = line.match(speakerRegex);
+
+    if (match) {
+      const speakerName = match[1].replace(/[*\[\]:]/g, '').trim();
+      const speechText = match[2];
+      return (
+        <div
+          key={index}
+          className="border-l-[3px] border-sky-400 pl-3.5 py-1 text-slate-800 leading-relaxed transition-colors hover:bg-sky-50/40 rounded-r-lg group"
+        >
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-xs font-bold text-sky-700 bg-sky-100/70 px-2 py-0.5 rounded-md">
+              {speakerName}
+            </span>
+          </div>
+          <p className="text-[15px] text-slate-800">{speechText}</p>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        key={index}
+        className="border-l-[3px] border-sky-400 pl-3.5 py-1 text-slate-800 leading-relaxed text-[15px] transition-colors hover:bg-sky-50/40 rounded-r-lg"
+      >
+        <p>{line}</p>
+      </div>
+    );
+  };
 
   return (
     <div className="flex-1 flex flex-col bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
@@ -43,8 +82,8 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           className="text-lg font-bold text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-600 focus:outline-none transition-colors w-full sm:w-auto flex-1 min-w-[200px]"
         />
 
-        {/* Word count, status, and Quick AI button at top */}
-        <div className="flex items-center gap-3">
+        {/* Word count, status, view toggle & Quick AI button at top */}
+        <div className="flex items-center flex-wrap gap-2.5">
           <div className="hidden sm:flex items-center gap-2 text-xs text-slate-400">
             <span className="flex items-center gap-1 text-emerald-600 font-medium">
               <Check className="w-3.5 h-3.5" />
@@ -54,6 +93,32 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
             <span>{wordCount} kata</span>
             <span className="text-slate-300">•</span>
             <span>{charCount} karakter</span>
+          </div>
+
+          {/* View Mode Toggle */}
+          <div className="flex items-center bg-slate-200/70 p-0.5 rounded-xl text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => setViewMode('dialog')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all ${
+                viewMode === 'dialog' ? 'bg-white text-sky-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Tampilan dialog bergaris kiri seperti di notulensi rapat"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>Dialog</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('raw')}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all ${
+                viewMode === 'raw' ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Mode ketik / edit teks bebas"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              <span>Edit Teks</span>
+            </button>
           </div>
 
           {onOpenAiAssistant && (
@@ -70,7 +135,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
 
       {/* Editor Body */}
       <div className="flex-1 p-6 flex flex-col overflow-y-auto space-y-4">
-        {/* Live Interim Speech Preview moved to TOP */}
+        {/* Live Interim Speech Preview at TOP */}
         {interimContent && (
           <div className="p-3 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200/80 rounded-xl text-sm font-medium text-indigo-900 italic shadow-xs flex items-center gap-2.5 animate-fadeIn">
             <span className="relative flex h-2.5 w-2.5">
@@ -86,19 +151,32 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           </div>
         )}
 
-        {/* Main Text Area */}
-        <div className="relative flex-1 min-h-[220px]">
-          <textarea
-            value={content}
-            onChange={(e) => onContentChange(e.target.value)}
-            placeholder={
-              isRecording
-                ? 'Sedang mendengarkan suara Anda...'
-                : 'Mulai bicara, teks Anda akan otomatis tertulis di sini secara real-time. Anda juga bisa mengedit atau mengetik langsung di sini...'
-            }
-            className="w-full h-full min-h-[220px] resize-none text-base text-slate-800 leading-relaxed font-sans placeholder:text-slate-300 focus:outline-none bg-transparent"
-          />
-        </div>
+        {/* Main Content Area */}
+        {viewMode === 'dialog' ? (
+          <div className="flex-1 min-h-[220px] space-y-2.5">
+            {lines.length === 0 ? (
+              <div
+                onClick={() => setViewMode('raw')}
+                className="py-12 text-center text-slate-300 text-sm cursor-pointer hover:text-slate-400"
+              >
+                {isRecording
+                  ? 'Sedang mendengarkan suara Anda... Setiap kalimat selesai akan otomatis turun ke baris baru.'
+                  : 'Mulai bicara, teks Anda akan otomatis tertulis rapi per baris dengan garis di samping. Klik di sini untuk mengetik manual...'}
+              </div>
+            ) : (
+              lines.map((line, idx) => renderDialogLine(line, idx))
+            )}
+          </div>
+        ) : (
+          <div className="relative flex-1 min-h-[220px]">
+            <textarea
+              value={content}
+              onChange={(e) => onContentChange(e.target.value)}
+              placeholder="Ketik atau edit transkrip di sini..."
+              className="w-full h-full min-h-[220px] resize-none text-base text-slate-800 leading-relaxed font-sans placeholder:text-slate-300 focus:outline-none bg-transparent"
+            />
+          </div>
+        )}
 
         {/* AI Attachments Section (If any) */}
         {(aiSummary || aiActionItems) && (

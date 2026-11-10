@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Sparkles, FileText, CheckSquare, Wand2, X, Copy, Check, AlertCircle, Settings, Loader2, ArrowRight } from 'lucide-react';
+import { Sparkles, FileText, CheckSquare, Wand2, X, Copy, Check, AlertCircle, Settings, Loader2, ArrowRight, Users } from 'lucide-react';
 import { executeAITask, type AISettings } from '../services/aiService';
 import { getSetting } from '../db';
 
@@ -22,7 +22,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
   onSaveActions,
   onOpenSettings,
 }) => {
-  const [activeTab, setActiveTab] = useState<'polish' | 'summarize' | 'actions'>('polish');
+  const [activeTab, setActiveTab] = useState<'speakers' | 'polish' | 'summarize' | 'actions'>('speakers');
   const [loading, setLoading] = useState(false);
   const [resultText, setResultText] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
@@ -31,7 +31,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleRunAI = async (type: 'polish' | 'summarize' | 'actions') => {
+  const handleRunAI = async (type: 'speakers' | 'polish' | 'summarize' | 'actions') => {
     setActiveTab(type);
     setErrorMsg('');
     setResultText('');
@@ -73,7 +73,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
 
   const handleApply = () => {
     if (!resultText) return;
-    if (activeTab === 'polish') {
+    if (activeTab === 'speakers' || activeTab === 'polish') {
       onApplyPolished(resultText);
     } else if (activeTab === 'summarize') {
       onSaveSummary(resultText);
@@ -98,7 +98,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
             </div>
             <div>
               <h3 className="font-semibold text-slate-800 text-base">Asisten AI Transkrip</h3>
-              <p className="text-xs text-slate-500">Olah rekaman Anda dengan model AI (Gemini / Groq / OpenAI)</p>
+              <p className="text-xs text-slate-500">Deteksi pembicara, rapikan teks, ringkas, & action items (Gemini / Groq / OpenAI)</p>
             </div>
           </div>
           <button
@@ -112,41 +112,53 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
         {/* Content Body */}
         <div className="p-6 flex-1 overflow-y-auto space-y-5">
           {/* Action Tabs */}
-          <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1 bg-slate-100 rounded-xl">
+            <button
+              onClick={() => handleRunAI('speakers')}
+              disabled={loading}
+              className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-semibold transition-all ${
+                activeTab === 'speakers'
+                  ? 'bg-white text-indigo-600 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Deteksi Pembicara</span>
+            </button>
             <button
               onClick={() => handleRunAI('polish')}
               disabled={loading}
-              className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-semibold transition-all ${
+              className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-semibold transition-all ${
                 activeTab === 'polish'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Wand2 className="w-4 h-4" />
+              <Wand2 className="w-3.5 h-3.5" />
               <span>Rapikan Teks</span>
             </button>
             <button
               onClick={() => handleRunAI('summarize')}
               disabled={loading}
-              className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-semibold transition-all ${
+              className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-semibold transition-all ${
                 activeTab === 'summarize'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <FileText className="w-4 h-4" />
-              <span>Ringkasan Rapat</span>
+              <FileText className="w-3.5 h-3.5" />
+              <span>Ringkasan</span>
             </button>
             <button
               onClick={() => handleRunAI('actions')}
               disabled={loading}
-              className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-semibold transition-all ${
+              className={`flex items-center justify-center gap-1.5 py-2 px-2.5 rounded-lg text-xs font-semibold transition-all ${
                 activeTab === 'actions'
                   ? 'bg-white text-indigo-600 shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <CheckSquare className="w-4 h-4" />
+              <CheckSquare className="w-3.5 h-3.5" />
               <span>Action Items</span>
             </button>
           </div>
@@ -177,8 +189,10 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
           {loading && (
             <div className="flex flex-col items-center justify-center py-12 space-y-3">
               <Loader2 className="w-8 h-8 text-indigo-600 animate-spin" />
-              <p className="text-sm font-medium text-slate-600">Sedang memproses dengan AI...</p>
-              <p className="text-xs text-slate-400">Menganalisis konteks dan menyusun hasil</p>
+              <p className="text-sm font-medium text-slate-600">
+                {activeTab === 'speakers' ? 'Sedang menganalisis pergantian dan nama pembicara...' : 'Sedang memproses dengan AI...'}
+              </p>
+              <p className="text-xs text-slate-400">Mendeteksi konteks dialog dan merapikan kalimat</p>
             </div>
           )}
 
@@ -187,7 +201,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                  Hasil Pemrosesan ({activeTab})
+                  Hasil Pemrosesan ({activeTab === 'speakers' ? 'Deteksi Pembicara' : activeTab})
                 </span>
                 <button
                   onClick={handleCopy}
@@ -207,9 +221,9 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
           {!loading && !resultText && !errorMsg && (
             <div className="text-center py-8 text-slate-400 space-y-2">
               <Sparkles className="w-10 h-10 mx-auto text-indigo-300 stroke-1" />
-              <p className="text-sm font-medium text-slate-600">Pilih salah satu tindakan AI di atas</p>
+              <p className="text-sm font-medium text-slate-600">Pilih salah satu fitur AI di atas</p>
               <p className="text-xs max-w-sm mx-auto text-slate-400">
-                AI akan membantu memoles tanda baca, merangkum inti pembicaraan, atau mengekstrak daftar tugas penting.
+                Gunakan <strong>Deteksi Pembicara</strong> untuk memisahkan dialog percakapan (A & B atau nama orang seperti Pak Bagus, Bu Ayu), atau gunakan <strong>Rapikan Teks</strong> untuk tanda baca.
               </p>
             </div>
           )}
@@ -248,7 +262,7 @@ export const AiAssistantModal: React.FC<AiAssistantModalProps> = ({
                   </>
                 ) : (
                   <>
-                    <span>{activeTab === 'polish' ? 'Gantikan ke Transkrip' : 'Simpan ke Transkrip'}</span>
+                    <span>{activeTab === 'speakers' || activeTab === 'polish' ? 'Gantikan ke Transkrip' : 'Simpan ke Transkrip'}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}
