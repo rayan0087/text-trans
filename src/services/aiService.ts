@@ -245,6 +245,19 @@ async function callOpenAICompatible(
 }
 
 /**
+ * Format raw transcript text into neat sentence lines
+ */
+export function formatIntoSentenceLines(rawText: string): string {
+  if (!rawText) return '';
+  const sentences = rawText
+    .replace(/([.?!])\s+/g, '$1\n')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return sentences.join('\n');
+}
+
+/**
  * Transcribe Audio using Whisper AI (Groq Whisper / OpenAI Whisper / Gemini Audio)
  */
 export async function transcribeAudio(
@@ -292,7 +305,7 @@ export async function transcribeAudio(
       }
 
       const data = await response.json();
-      return { success: true, result: data.text?.trim() };
+      return { success: true, result: formatIntoSentenceLines(data.text?.trim() || '') };
     } else if (provider === 'openai') {
       const formData = new FormData();
       formData.append('file', audioBlob, 'audio.webm');
@@ -313,11 +326,11 @@ export async function transcribeAudio(
       }
 
       const data = await response.json();
-      return { success: true, result: data.text?.trim() };
+      return { success: true, result: formatIntoSentenceLines(data.text?.trim() || '') };
     } else if (provider === 'gemini') {
       const base64Audio = await blobToBase64(audioBlob);
       const text = await callGeminiAudio(settings.apiKey.trim(), base64Audio, audioBlob.type || 'audio/webm');
-      return { success: true, result: text };
+      return { success: true, result: formatIntoSentenceLines(text || '') };
     }
 
     return {

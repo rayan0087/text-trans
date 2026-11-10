@@ -9,7 +9,6 @@ import { RecordingControls, type TranscriptionEngine } from './components/Record
 import { TranscriptEditor } from './components/TranscriptEditor';
 import { ExportToolbar } from './components/ExportToolbar';
 import { SettingsModal } from './components/SettingsModal';
-import { AiAssistantModal } from './components/AiAssistantModal';
 import { PanelLeft } from 'lucide-react';
 
 export function App() {
@@ -26,8 +25,8 @@ export function App() {
   const [aiSummary, setAiSummary] = useState<string | undefined>(undefined);
   const [aiActionItems, setAiActionItems] = useState<string | undefined>(undefined);
 
-  // Recording Engine & States
-  const [engine, setEngine] = useState<TranscriptionEngine>('browser');
+  // Recording Engine & States - Default to whisper if key exists
+  const [engine, setEngine] = useState<TranscriptionEngine>('whisper');
   const [speechState, setSpeechState] = useState<SpeechState>('idle');
   const [isSupported, setIsSupported] = useState(true);
   const [isTranscribingWhisper, setIsTranscribingWhisper] = useState(false);
@@ -39,7 +38,6 @@ export function App() {
   // Modals & UI Layout
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
 
   // Ref to track latest content for speech callbacks without closure traps
   const contentRef = useRef(content);
@@ -93,21 +91,33 @@ export function App() {
   useEffect(() => {
     setIsSupported(SpeechService.isSupported());
     audioRecorderRef.current = new AudioRecorderService();
+
+    // Check if user already has an API key configured
+    getSetting<AISettings>('ai_settings', { provider: 'groq', apiKey: '' }).then((saved) => {
+      if (saved && saved.apiKey) {
+        setEngine('whisper');
+      } else {
+        setEngine('browser');
+      }
+    });
   }, []);
 
-  // Initialize Speech Service
+  // Initialize Speech Service for live real-time feedback
   useEffect(() => {
     speechServiceRef.current = new SpeechService(
       {
         onFinalTranscript: (text) => {
-          setContent((prev) => {
-            const trimmed = text.trim();
-            if (!trimmed) return prev;
-            const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-            const updated = prev + separator + trimmed;
-            contentRef.current = updated;
-            return updated;
-          });
+          // If in browser mode, append text; if in whisper mode, live interim guides the user
+          if (engine === 'browser') {
+            setContent((prev) => {
+              const trimmed = text.trim();
+              if (!trimmed) return prev;
+              const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+              const updated = prev + separator + trimmed;
+              contentRef.current = updated;
+              return updated;
+            });
+          }
           setInterimContent('');
         },
         onInterimTranscript: (text) => {
@@ -126,7 +136,7 @@ export function App() {
     return () => {
       speechServiceRef.current?.stop();
     };
-  }, []);
+  }, [engine, language]);
 
   // Timer loop when recording
   useEffect(() => {
@@ -180,7 +190,7 @@ export function App() {
       });
       if (!settings.apiKey) {
         setIsSettingsOpen(true);
-        alert('Silakan masukkan API Key (Groq / OpenAI / Gemini) terlebih dahulu untuk mengaktifkan transkripsi Whisper AI.');
+        alert('Silakan masukkan API Key (Groq / OpenAI / Gemini) terlebih dahulu di Pengaturan untuk mengaktifkan transkripsi akurat Whisper AI.');
         return;
       }
       try {
@@ -224,18 +234,19 @@ export function App() {
           apiKey: '',
         });
 
+        // Transcribe directly via Whisper AI
         const response = await transcribeAudio(settings, audioBlob, language);
         setIsTranscribingWhisper(false);
 
         if (response.success && response.result) {
           const prev = previousContentBeforeRecordRef.current;
-          const separator = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? '\n\n' : '';
+          const separator = prev && !prev.endsWith('\n') ? '\n' : '';
           const finalUpdated = prev ? `${prev}${separator}${response.result}` : response.result;
           setContent(finalUpdated);
           contentRef.current = finalUpdated;
           persistTranscript({ content: finalUpdated });
         } else {
-          alert(`Catatan Whisper AI: ${response.error || 'Gagal memproses dengan Whisper'}. Teks sementara dari browser tetap dipertahankan.`);
+          alert(`Catatan Whisper AI: ${response.error || 'Gagal memproses dengan Whisper'}. Teks browser tetap disimpan.`);
           persistTranscript();
         }
       } catch (err: any) {
@@ -255,7 +266,6 @@ export function App() {
 
   // Switch / Create New Session
   const handleNewTranscript = async () => {
-    // If current one has text, save it first
     if (content.trim()) {
       await persistTranscript();
     }
@@ -300,22 +310,6 @@ export function App() {
     if (activeId === id) {
       handleNewTranscript();
     }
-  };
-
-  // AI Result Handlers
-  const handleApplyPolished = (newText: string) => {
-    setContent(newText);
-    persistTranscript({ content: newText });
-  };
-
-  const handleSaveSummary = (summaryText: string) => {
-    setAiSummary(summaryText);
-    persistTranscript({ aiSummary: summaryText });
-  };
-
-  const handleSaveActions = (actionsText: string) => {
-    setAiActionItems(actionsText);
-    persistTranscript({ aiActionItems: actionsText });
   };
 
   const currentRecord: Partial<TranscriptRecord> = {
@@ -376,7 +370,7 @@ export function App() {
           isTranscribingWhisper={isTranscribingWhisper}
         />
 
-        {/* 2. Main Live Transcript Editor */}
+        {/* 2. Main Live Transcript Editor with Sentence Dialog View */}
         <TranscriptEditor
           title={title}
           onTitleChange={setTitle}
@@ -388,13 +382,11 @@ export function App() {
           aiActionItems={aiActionItems}
           onClearAiSummary={() => setAiSummary(undefined)}
           onClearAiActions={() => setAiActionItems(undefined)}
-          onOpenAiAssistant={() => setIsAiModalOpen(true)}
         />
 
         {/* 3. Export & Action Toolbar */}
         <ExportToolbar
           currentRecord={currentRecord}
-          onOpenAiAssistant={() => setIsAiModalOpen(true)}
         />
       </main>
 
@@ -402,17 +394,9 @@ export function App() {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-      />
-
-      {/* AI Assistant Modal */}
-      <AiAssistantModal
-        isOpen={isAiModalOpen}
-        onClose={() => setIsAiModalOpen(false)}
-        transcriptContent={content}
-        onApplyPolished={handleApplyPolished}
-        onSaveSummary={handleSaveSummary}
-        onSaveActions={handleSaveActions}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onSaved={() => {
+          setEngine('whisper');
+        }}
       />
     </div>
   );

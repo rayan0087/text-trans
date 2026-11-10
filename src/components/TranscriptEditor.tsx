@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, FileText, CheckSquare, Trash, Sparkles, MessageSquare, Edit3 } from 'lucide-react';
+import { Check, FileText, CheckSquare, Trash, MessageSquare, Edit3 } from 'lucide-react';
 
 interface TranscriptEditorProps {
   title: string;
@@ -12,7 +12,6 @@ interface TranscriptEditorProps {
   aiActionItems?: string;
   onClearAiSummary?: () => void;
   onClearAiActions?: () => void;
-  onOpenAiAssistant?: () => void;
 }
 
 export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
@@ -26,7 +25,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   aiActionItems,
   onClearAiSummary,
   onClearAiActions,
-  onOpenAiAssistant,
 }) => {
   const [viewMode, setViewMode] = useState<'dialog' | 'raw'>('dialog');
 
@@ -120,16 +118,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
               <span>Edit Teks</span>
             </button>
           </div>
-
-          {onOpenAiAssistant && (
-            <button
-              onClick={onOpenAiAssistant}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl text-xs font-semibold shadow-xs transition-all active:scale-95"
-            >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>Asisten AI</span>
-            </button>
-          )}
         </div>
       </div>
 
