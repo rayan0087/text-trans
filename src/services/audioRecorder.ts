@@ -2,6 +2,7 @@ export interface AudioRecorderOptions {
   onChunkReady?: (audioBlob: Blob) => void;
   silenceThresholdMs?: number;
   maxChunkDurationMs?: number;
+  enableVAD?: boolean;
 }
 
 export class AudioRecorderService {
@@ -24,6 +25,7 @@ export class AudioRecorderService {
     this.options = {
       silenceThresholdMs: 1200, // 1.2s silence after speaking
       maxChunkDurationMs: 8000,  // max 8s per chunk
+      enableVAD: false,          // disabled by default when external speech recognition coordinates
       ...options,
     };
   }
@@ -89,74 +91,117 @@ export class AudioRecorderService {
         this.analyser.fftSize = 512;
         source.connect(this.analyser);
 
-        const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+        if (this.options.enableVAD) {
+          const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
 
-        this.vadInterval = setInterval(() => {
-          if (!this.analyser || !this.mediaRecorder || this.mediaRecorder.state !== 'recording') return;
+          this.vadInterval = setInterval(() => {
+            if (!this.analyser || !this.mediaRecorder || this.mediaRecorder.state !== 'recording') return;
 
-          this.analyser.getByteFrequencyData(dataArray);
-          
-          // Focus analysis on the human voice frequency band (~120Hz to ~3400Hz, bins 2 to 38)
-          // to eliminate low-frequency rumbles (AC/mic bumps) and high-frequency noise
-          const minBin = 2;
-          const maxBin = Math.min(38, dataArray.length);
-          let voiceSum = 0;
-          for (let i = minBin; i < maxBin; i++) {
-            voiceSum += dataArray[i];
-          }
-          const avgVoiceVolume = voiceSum / (maxBin - minBin);
+            this.analyser.getByteFrequencyData(dataArray);
+            
+            // Focus analysis on the human voice frequency band (~120Hz to ~3400Hz, bins 2 to 38)
+            const minBin = 2;
+            const maxBin = Math.min(38, dataArray.length);
+            let voiceSum = 0;
+            for (let i = minBin; i < maxBin; i++) {
+              voiceSum += dataArray[i];
+            }
+            const avgVoiceVolume = voiceSum / (maxBin - minBin);
 
-          const now = Date.now();
-          const chunkDuration = now - this.chunkStartTime;
+            const now = Date.now();
+            const chunkDuration = now - this.chunkStartTime;
 
-          // Sound threshold: avgVoiceVolume > 12 indicates active human speech
-          if (avgVoiceVolume > 12) {
-            this.hasSpokenInCurrentChunk = true;
-            this.lastSpokeTime = now;
-          }
+            if (avgVoiceVolume > 12) {
+              this.hasSpokenInCurrentChunk = true;
+              this.lastSpokeTime = now;
+            }
 
-          const silenceDuration = now - this.lastSpokeTime;
+            const silenceDuration = now - this.lastSpokeTime;
 
-          // Condition 1: Natural sentence pause
-          // Trigger when user pauses for >= silenceThreshold (default 1100ms) AFTER having spoken for at least 2 seconds
-          const isNaturalPause = 
-            this.hasSpokenInCurrentChunk && 
-            chunkDuration >= 2000 && 
-            silenceDuration >= (this.options.silenceThresholdMs || 1100);
+            // Condition 1: Natural sentence pause
+            const isNaturalPause = 
+              this.hasSpokenInCurrentChunk && 
+              chunkDuration >= 2000 && 
+              silenceDuration >= (this.options.silenceThresholdMs || 1100);
 
-          // Condition 2: Max duration cap reached (default 8s) while speaking, to prevent lagging behind
-          const isMaxDuration = 
-            this.hasSpokenInCurrentChunk && 
-            chunkDuration >= (this.options.maxChunkDurationMs || 8000) &&
-            silenceDuration >= 400; // brief natural break within the speech
+            // Condition 2: Max duration cap reached (default 8s) while speaking
+            const isMaxDuration = 
+              this.hasSpokenInCurrentChunk && 
+              chunkDuration >= (this.options.maxChunkDurationMs || 8000) &&
+              silenceDuration >= 400;
 
-          // Condition 3: Hard limit (10s)
-          const isHardLimit = this.hasSpokenInCurrentChunk && chunkDuration >= 10000;
+            // Condition 3: Hard limit (10s)
+            const isHardLimit = this.hasSpokenInCurrentChunk && chunkDuration >= 10000;
 
-          if ((isNaturalPause || isMaxDuration || isHardLimit) && this.options.onChunkReady) {
-            this.sliceAndEmitCurrentChunk();
-          }
-        }, 150);
+            if ((isNaturalPause || isMaxDuration || isHardLimit) && this.options.onChunkReady) {
+              this.sliceAndEmitCurrentChunk();
+            }
+          }, 150);
+        }
       }
     } catch (err) {
       console.warn('AudioContext setup error (silence detection disabled):', err);
     }
   }
 
-  private sliceAndEmitCurrentChunk(): void {
-    if (this.currentChunks.length === 0) return;
+  /**
+   * Finalizes the current utterance into a 100% valid standalone WebM file (with EBML header)
+   * and immediately restarts recording for the next phrase on the active microphone stream.
+   */
+  public async cutUtterance(): Promise<Blob | null> {
+    if (!this.mediaRecorder || this.mediaRecorder.state === 'inactive') {
+      return null;
+    }
 
-    const chunkBlob = new Blob(this.currentChunks, {
-      type: this.mimeType || 'audio/webm',
+    return new Promise((resolve) => {
+      const recorder = this.mediaRecorder;
+      if (!recorder || recorder.state === 'inactive') {
+        resolve(null);
+        return;
+      }
+
+      recorder.onstop = () => {
+        const utteranceBlob = new Blob(this.currentChunks, {
+          type: this.mimeType || 'audio/webm',
+        });
+        this.currentChunks = [];
+        this.hasSpokenInCurrentChunk = false;
+        this.chunkStartTime = Date.now();
+        this.lastSpokeTime = Date.now();
+
+        // Immediately restart MediaRecorder so subsequent speech is not lost
+        try {
+          if (this.stream && this.stream.active) {
+            const options = this.mimeType ? { mimeType: this.mimeType } : undefined;
+            this.mediaRecorder = new MediaRecorder(this.stream, options);
+            this.mediaRecorder.ondataavailable = (event) => {
+              if (event.data && event.data.size > 0) {
+                this.currentChunks.push(event.data);
+                this.allRecordedChunks.push(event.data);
+              }
+            };
+            this.mediaRecorder.start(400);
+          }
+        } catch (err) {
+          console.warn('Error restarting MediaRecorder for next utterance:', err);
+        }
+
+        resolve(utteranceBlob.size > 1500 ? utteranceBlob : null);
+      };
+
+      try {
+        recorder.stop();
+      } catch (err) {
+        console.warn('Error stopping MediaRecorder in cutUtterance:', err);
+        resolve(null);
+      }
     });
-    this.currentChunks = [];
-    this.hasSpokenInCurrentChunk = false;
-    this.chunkStartTime = Date.now();
-    this.lastSpokeTime = Date.now();
+  }
 
-    // Ensure audio chunk contains enough data (> 3000 bytes) to be valid
-    if (chunkBlob.size > 3000 && this.options.onChunkReady) {
-      this.options.onChunkReady(chunkBlob);
+  private async sliceAndEmitCurrentChunk(): Promise<void> {
+    const blob = await this.cutUtterance();
+    if (blob && this.options.onChunkReady) {
+      this.options.onChunkReady(blob);
     }
   }
 

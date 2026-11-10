@@ -139,18 +139,65 @@ export function App() {
   useEffect(() => {
     speechServiceRef.current = new SpeechService(
       {
-        onFinalTranscript: (text) => {
+        onFinalTranscript: async (text) => {
+          const trimmed = text.trim();
+          setInterimContent('');
+          if (!trimmed) return;
+
           if (engine === 'browser') {
             setContent((prev) => {
-              const trimmed = text.trim();
-              if (!trimmed) return prev;
               const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-              const updated = prev + separator + trimmed;
+              const updated = prev ? `${prev}${separator}${trimmed}` : trimmed;
               contentRef.current = updated;
               return updated;
             });
+          } else if (engine === 'whisper') {
+            // 1. Immediately append the text to editor so it is NEVER lost or discarded
+            const tempLine = trimmed;
+            setContent((prev) => {
+              const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+              const updated = prev ? `${prev}${separator}${tempLine}` : tempLine;
+              contentRef.current = updated;
+              return updated;
+            });
+
+            // 2. Cut clean audio utterance and refine via Whisper AI for scientific/technical precision & punctuation
+            if (audioRecorderRef.current) {
+              try {
+                setIsTranscribingWhisper(true);
+                const audioBlob = await audioRecorderRef.current.cutUtterance();
+                if (audioBlob) {
+                  const settings = await getSetting<AISettings>('ai_settings', {
+                    provider: 'groq',
+                    apiKey: '',
+                  });
+                  if (settings.apiKey) {
+                    const res = await transcribeAudio(settings, audioBlob, language, contentRef.current);
+                    if (res.success && typeof res.result === 'string' && res.result.trim()) {
+                      const refined = res.result.trim();
+                      setContent((prev) => {
+                        if (prev.endsWith(tempLine)) {
+                          const updated = prev.slice(0, prev.length - tempLine.length) + refined;
+                          contentRef.current = updated;
+                          return updated;
+                        } else if (prev.includes(tempLine)) {
+                          const lastIndex = prev.lastIndexOf(tempLine);
+                          const updated = prev.slice(0, lastIndex) + refined + prev.slice(lastIndex + tempLine.length);
+                          contentRef.current = updated;
+                          return updated;
+                        }
+                        return prev;
+                      });
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn('Whisper refinement error:', err);
+              } finally {
+                setIsTranscribingWhisper(false);
+              }
+            }
           }
-          setInterimContent('');
         },
         onInterimTranscript: (text) => {
           setInterimContent(text);
