@@ -1,8 +1,10 @@
 import React from 'react';
-import { Mic, Pause, Play, Square, Globe2, AlertTriangle } from 'lucide-react';
+import { Mic, Pause, Play, Square, Globe2, AlertTriangle, Sparkles, Zap, Loader2 } from 'lucide-react';
 import { type SpeechState } from '../services/speechRecognition';
 import { AudioVisualizer } from './AudioVisualizer';
 import { formatDuration } from '../services/exportService';
+
+export type TranscriptionEngine = 'browser' | 'whisper';
 
 interface RecordingControlsProps {
   speechState: SpeechState;
@@ -14,6 +16,9 @@ interface RecordingControlsProps {
   onResume: () => void;
   onStop: () => void;
   isSupported: boolean;
+  engine: TranscriptionEngine;
+  onEngineChange: (engine: TranscriptionEngine) => void;
+  isTranscribingWhisper: boolean;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -26,15 +31,18 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onResume,
   onStop,
   isSupported,
+  engine,
+  onEngineChange,
+  isTranscribingWhisper,
 }) => {
-  if (!isSupported) {
+  if (!isSupported && engine === 'browser') {
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3 text-amber-800 text-xs">
         <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
         <div>
           <p className="font-semibold text-amber-900">Browser Tidak Mendukung Web Speech API</p>
           <p className="mt-0.5">
-            Silakan gunakan <strong>Google Chrome</strong> atau <strong>Microsoft Edge</strong> di komputer Anda untuk menggunakan fitur perekaman suara real-time ini.
+            Gunakan mode <strong>Whisper AI</strong> atau buka di <strong>Google Chrome / Edge</strong>.
           </p>
         </div>
       </div>
@@ -43,8 +51,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 flex flex-wrap items-center justify-between gap-4">
-      {/* Left side: Status badge & Timer */}
-      <div className="flex items-center gap-4">
+      {/* Left side: Status badge, Engine badge & Timer */}
+      <div className="flex items-center flex-wrap gap-3 sm:gap-4">
         <div className="flex items-center gap-2">
           {speechState === 'recording' && (
             <span className="relative flex h-3 w-3">
@@ -71,14 +79,54 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         <div className="font-mono text-base font-bold text-slate-700 bg-slate-100 px-3 py-1 rounded-lg">
           {formatDuration(durationSeconds)}
         </div>
+
+        {/* Engine Switcher */}
+        <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs font-semibold">
+          <button
+            type="button"
+            disabled={speechState !== 'idle'}
+            onClick={() => onEngineChange('browser')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all ${
+              engine === 'browser'
+                ? 'bg-white text-slate-800 shadow-xs'
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+            title="Browser Web Speech API: Instan & 100% Gratis"
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-500" />
+            <span>Browser</span>
+          </button>
+          <button
+            type="button"
+            disabled={speechState !== 'idle'}
+            onClick={() => onEngineChange('whisper')}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all ${
+              engine === 'whisper'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'text-slate-500 hover:text-indigo-600'
+            }`}
+            title="Whisper AI: Akurasi Tinggi (Groq/OpenAI/Gemini)"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-indigo-300" />
+            <span>Whisper AI</span>
+          </button>
+        </div>
+
+        {isTranscribingWhisper && (
+          <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold rounded-lg animate-pulse">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span>Mentranskrip dengan Whisper AI...</span>
+          </div>
+        )}
       </div>
 
-      {/* Center / Right: Buttons */}
+      {/* Right side: Action Buttons & Language */}
       <div className="flex items-center gap-2.5">
         {speechState === 'idle' && (
           <button
             onClick={onStart}
-            className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 hover:shadow-rose-300 transition-all active:scale-95"
+            disabled={isTranscribingWhisper}
+            className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 hover:shadow-rose-300 transition-all active:scale-95 disabled:opacity-50"
           >
             <Mic className="w-4 h-4" />
             <span>Mulai Rekam</span>

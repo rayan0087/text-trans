@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type TranscriptRecord } from './db';
+import { db, getSetting, type TranscriptRecord } from './db';
 import { SpeechService, type SpeechState } from './services/speechRecognition';
+import { AudioRecorderService } from './services/audioRecorder';
+import { transcribeAudio, type AISettings } from './services/aiService';
 import { Sidebar } from './components/Sidebar';
-import { RecordingControls } from './components/RecordingControls';
+import { RecordingControls, type TranscriptionEngine } from './components/RecordingControls';
 import { TranscriptEditor } from './components/TranscriptEditor';
 import { ExportToolbar } from './components/ExportToolbar';
 import { SettingsModal } from './components/SettingsModal';
@@ -24,10 +26,15 @@ export function App() {
   const [aiSummary, setAiSummary] = useState<string | undefined>(undefined);
   const [aiActionItems, setAiActionItems] = useState<string | undefined>(undefined);
 
-  // Recording State & Service
+  // Recording Engine & States
+  const [engine, setEngine] = useState<TranscriptionEngine>('browser');
   const [speechState, setSpeechState] = useState<SpeechState>('idle');
   const [isSupported, setIsSupported] = useState(true);
+  const [isTranscribingWhisper, setIsTranscribingWhisper] = useState(false);
+
+  // Service References
   const speechServiceRef = useRef<SpeechService | null>(null);
+  const audioRecorderRef = useRef<AudioRecorderService | null>(null);
 
   // Modals & UI Layout
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -37,6 +44,9 @@ export function App() {
   // Ref to track latest content for speech callbacks without closure traps
   const contentRef = useRef(content);
   contentRef.current = content;
+
+  // Track initial content before current recording starts (to append Whisper accurately)
+  const previousContentBeforeRecordRef = useRef('');
 
   // Auto-save debouncing
   const saveTimeoutRef = useRef<any>(null);
@@ -79,9 +89,10 @@ export function App() {
     [activeId, title, durationSeconds, language, aiSummary, aiActionItems]
   );
 
-  // Check Web Speech API support
+  // Check Web Speech API support & Initialize AudioRecorder
   useEffect(() => {
     setIsSupported(SpeechService.isSupported());
+    audioRecorderRef.current = new AudioRecorderService();
   }, []);
 
   // Initialize Speech Service
@@ -142,25 +153,97 @@ export function App() {
     };
   }, [content, title, durationSeconds, persistTranscript]);
 
+  // Handle Engine Switch with API Key verification
+  const handleEngineChange = async (newEngine: TranscriptionEngine) => {
+    if (newEngine === 'whisper') {
+      const settings = await getSetting<AISettings>('ai_settings', {
+        provider: 'groq',
+        apiKey: '',
+      });
+      if (!settings.apiKey) {
+        setIsSettingsOpen(true);
+        alert('Mode Whisper AI membutuhkan API Key (Groq / OpenAI / Gemini). Silakan simpan API Key Anda di menu Pengaturan.');
+        return;
+      }
+    }
+    setEngine(newEngine);
+  };
+
   // Controls Handlers
-  const handleStart = () => {
+  const handleStart = async () => {
+    if (engine === 'whisper') {
+      const settings = await getSetting<AISettings>('ai_settings', {
+        provider: 'groq',
+        apiKey: '',
+      });
+      if (!settings.apiKey) {
+        setIsSettingsOpen(true);
+        alert('Silakan masukkan API Key (Groq / OpenAI / Gemini) terlebih dahulu untuk mengaktifkan transkripsi Whisper AI.');
+        return;
+      }
+      try {
+        previousContentBeforeRecordRef.current = contentRef.current;
+        await audioRecorderRef.current?.start();
+      } catch (err: any) {
+        alert(`Gagal mengakses mikrofon untuk perekaman audio: ${err.message}`);
+        return;
+      }
+    }
+
     speechServiceRef.current?.setLanguage(language);
     speechServiceRef.current?.start();
   };
 
   const handlePause = () => {
     speechServiceRef.current?.pause();
+    if (engine === 'whisper') {
+      audioRecorderRef.current?.pause();
+    }
     persistTranscript();
   };
 
   const handleResume = () => {
     speechServiceRef.current?.resume();
+    if (engine === 'whisper') {
+      audioRecorderRef.current?.resume();
+    }
   };
 
-  const handleStop = () => {
+  const handleStop = async () => {
     speechServiceRef.current?.stop();
     setInterimContent('');
-    persistTranscript();
+
+    if (engine === 'whisper' && audioRecorderRef.current) {
+      try {
+        setIsTranscribingWhisper(true);
+        const audioBlob = await audioRecorderRef.current.stop();
+        const settings = await getSetting<AISettings>('ai_settings', {
+          provider: 'groq',
+          apiKey: '',
+        });
+
+        const response = await transcribeAudio(settings, audioBlob, language);
+        setIsTranscribingWhisper(false);
+
+        if (response.success && response.result) {
+          const prev = previousContentBeforeRecordRef.current;
+          const separator = prev && !prev.endsWith(' ') && !prev.endsWith('\n') ? '\n\n' : '';
+          const finalUpdated = prev ? `${prev}${separator}${response.result}` : response.result;
+          setContent(finalUpdated);
+          contentRef.current = finalUpdated;
+          persistTranscript({ content: finalUpdated });
+        } else {
+          alert(`Catatan Whisper AI: ${response.error || 'Gagal memproses dengan Whisper'}. Teks sementara dari browser tetap dipertahankan.`);
+          persistTranscript();
+        }
+      } catch (err: any) {
+        setIsTranscribingWhisper(false);
+        console.error('Whisper transcription error:', err);
+        persistTranscript();
+      }
+    } else {
+      persistTranscript();
+    }
   };
 
   const handleLanguageChange = (newLang: string) => {
@@ -176,6 +259,9 @@ export function App() {
     }
     if (speechState !== 'idle') {
       speechServiceRef.current?.stop();
+      if (engine === 'whisper') {
+        audioRecorderRef.current?.stop();
+      }
     }
 
     setActiveId(null);
@@ -190,6 +276,9 @@ export function App() {
   const handleSelectTranscript = (id: number) => {
     if (speechState !== 'idle') {
       speechServiceRef.current?.stop();
+      if (engine === 'whisper') {
+        audioRecorderRef.current?.stop();
+      }
     }
     const target = transcripts.find((t) => t.id === id);
     if (target) {
@@ -266,7 +355,7 @@ export function App() {
           <span className="text-xs font-bold text-slate-800">Transkrip Kilat</span>
         </div>
 
-        {/* 1. Recording Controls Bar */}
+        {/* 1. Recording Controls Bar with Engine Toggle */}
         <RecordingControls
           speechState={speechState}
           durationSeconds={durationSeconds}
@@ -277,6 +366,9 @@ export function App() {
           onResume={handleResume}
           onStop={handleStop}
           isSupported={isSupported}
+          engine={engine}
+          onEngineChange={handleEngineChange}
+          isTranscribingWhisper={isTranscribingWhisper}
         />
 
         {/* 2. Main Live Transcript Editor */}

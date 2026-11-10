@@ -55,7 +55,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       case 'gemini':
         return {
           name: 'Google Gemini',
-          badge: 'Sangat Direkomendasikan (Gratis)',
+          badge: 'Audio & Teks (Gratis)',
           link: 'https://aistudio.google.com/app/apikey',
           linkText: 'Dapatkan API Key Gemini Gratis di Google AI Studio',
           placeholder: 'AIzaSy...',
@@ -64,7 +64,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       case 'groq':
         return {
           name: 'Groq Cloud',
-          badge: 'Ultra Cepat (Gratis)',
+          badge: 'Whisper AI Turbo (Gratis & Sangat Cepat)',
           link: 'https://console.groq.com/keys',
           linkText: 'Dapatkan API Key Groq Gratis di Groq Console',
           placeholder: 'gsk_...',
@@ -73,7 +73,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       case 'openai':
         return {
           name: 'OpenAI (ChatGPT)',
-          badge: 'Berbayar / Akun OpenAI',
+          badge: 'Whisper & GPT-4o',
           link: 'https://platform.openai.com/api-keys',
           linkText: 'Dapatkan API Key OpenAI di Platform OpenAI',
           placeholder: 'sk-...',
