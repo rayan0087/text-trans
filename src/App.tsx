@@ -45,9 +45,8 @@ export function App() {
   const contentRef = useRef(content);
   contentRef.current = content;
 
-  // Unfinalized speech & silence debouncing
+  // Unfinalized speech ref
   const interimSpeechRef = useRef<string>('');
-  const silenceDebounceTimerRef = useRef<any>(null);
 
   // Auto-save debouncing
   const saveTimeoutRef = useRef<any>(null);
@@ -103,15 +102,52 @@ export function App() {
     });
   }, []);
 
-  // Commit an utterance into the transcript (strictly and faithfully records what was in "Bicara Aktif")
+  // Commit an utterance into the transcript (strictly and faithfully records what was in "Bicara Aktif" with smart deduplication)
   const commitUtterance = useCallback(
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
 
       setContent((prev) => {
+        if (!prev) {
+          contentRef.current = trimmed;
+          return trimmed;
+        }
+
+        const lines = prev.split('\n');
+        let lastNonEmptyIndex = lines.length - 1;
+        while (lastNonEmptyIndex >= 0 && !lines[lastNonEmptyIndex].trim()) {
+          lastNonEmptyIndex--;
+        }
+
+        if (lastNonEmptyIndex >= 0) {
+          const lastLine = lines[lastNonEmptyIndex].trim();
+          const normLast = lastLine.replace(/[.,?!]+$/, '').trim().toLowerCase();
+          const normTrimmed = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
+
+          // Case 1: Exact duplicate -> ignore
+          if (normLast === normTrimmed) {
+            return prev;
+          }
+
+          // Case 2: New text is an extended continuation of the last line -> update/replace the last line!
+          // This completely eliminates cumulative interim duplication
+          if (normTrimmed.startsWith(normLast + ' ') || (normLast.length > 3 && normTrimmed.startsWith(normLast))) {
+            lines[lastNonEmptyIndex] = trimmed;
+            const updated = lines.join('\n');
+            contentRef.current = updated;
+            return updated;
+          }
+
+          // Case 3: The last line already includes this new text completely -> ignore
+          if (normLast.startsWith(normTrimmed + ' ') || normLast === normTrimmed) {
+            return prev;
+          }
+        }
+
+        // Case 4: Brand new utterance -> append on new line
         const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-        const updated = prev ? `${prev}${separator}${trimmed}` : trimmed;
+        const updated = prev + separator + trimmed;
         contentRef.current = updated;
         return updated;
       });
@@ -124,10 +160,6 @@ export function App() {
     speechServiceRef.current = new SpeechService(
       {
         onFinalTranscript: (text) => {
-          if (silenceDebounceTimerRef.current) {
-            clearTimeout(silenceDebounceTimerRef.current);
-            silenceDebounceTimerRef.current = null;
-          }
           interimSpeechRef.current = '';
           setInterimContent('');
           const trimmed = text.trim();
@@ -138,25 +170,6 @@ export function App() {
         onInterimTranscript: (text) => {
           setInterimContent(text);
           interimSpeechRef.current = text;
-
-          // Clear previous silence timer
-          if (silenceDebounceTimerRef.current) {
-            clearTimeout(silenceDebounceTimerRef.current);
-            silenceDebounceTimerRef.current = null;
-          }
-
-          // If speech is detected, start a 1000ms countdown of silence to commit
-          // This guarantees that when the user stops speaking, it NEVER disappears!
-          if (text.trim()) {
-            silenceDebounceTimerRef.current = setTimeout(() => {
-              if (interimSpeechRef.current.trim()) {
-                const speechToCommit = interimSpeechRef.current.trim();
-                interimSpeechRef.current = '';
-                setInterimContent('');
-                commitUtterance(speechToCommit);
-              }
-            }, 1000);
-          }
         },
         onStateChange: (state) => {
           setSpeechState(state);
@@ -255,10 +268,6 @@ export function App() {
   };
 
   const handleStop = async () => {
-    if (silenceDebounceTimerRef.current) {
-      clearTimeout(silenceDebounceTimerRef.current);
-      silenceDebounceTimerRef.current = null;
-    }
     if (interimSpeechRef.current.trim()) {
       const remainingSpeech = interimSpeechRef.current.trim();
       interimSpeechRef.current = '';

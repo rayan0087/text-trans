@@ -73,6 +73,8 @@ export class SpeechService {
         
         if (interimStr.trim()) {
           this.currentInterim = interimStr;
+        } else {
+          this.currentInterim = '';
         }
         this.callbacks.onInterimTranscript(interimStr);
       };
