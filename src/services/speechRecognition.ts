@@ -18,6 +18,7 @@ export class SpeechService {
   private isListening: boolean = false;
   private isPaused: boolean = false;
   private language: string = 'id-ID';
+  private currentInterim: string = '';
   private callbacks: SpeechCallbacks;
 
   constructor(callbacks: SpeechCallbacks, language: string = 'id-ID') {
@@ -66,7 +67,12 @@ export class SpeechService {
         }
 
         if (finalStr.trim()) {
+          this.currentInterim = '';
           this.callbacks.onFinalTranscript(finalStr);
+        }
+        
+        if (interimStr.trim()) {
+          this.currentInterim = interimStr;
         }
         this.callbacks.onInterimTranscript(interimStr);
       };
@@ -90,6 +96,12 @@ export class SpeechService {
       };
 
       this.recognition.onend = () => {
+        // If there was unfinalized speech when recognition ended/paused, finalize it so it is not lost
+        if (this.currentInterim.trim()) {
+          this.callbacks.onFinalTranscript(this.currentInterim);
+          this.currentInterim = '';
+        }
+
         // Auto restart if still supposed to be listening and not paused
         if (this.isListening && !this.isPaused) {
           try {

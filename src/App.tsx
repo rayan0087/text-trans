@@ -43,6 +43,10 @@ export function App() {
   const contentRef = useRef(content);
   contentRef.current = content;
 
+  // Unfinalized speech & silence debouncing
+  const interimSpeechRef = useRef<string>('');
+  const silenceDebounceTimerRef = useRef<any>(null);
+
   // Auto-save debouncing
   const saveTimeoutRef = useRef<any>(null);
 
@@ -135,72 +139,109 @@ export function App() {
     });
   }, [processStreamingWhisperChunk]);
 
+  // Commit an utterance into the transcript (instantly visible, then refined via Whisper in background)
+  const commitUtterance = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      const tempLine = trimmed;
+
+      if (engine === 'browser') {
+        setContent((prev) => {
+          const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+          const updated = prev ? `${prev}${separator}${trimmed}` : trimmed;
+          contentRef.current = updated;
+          return updated;
+        });
+      } else if (engine === 'whisper') {
+        // 1. Immediately append the text to editor so it is NEVER lost or dropped
+        setContent((prev) => {
+          const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+          const updated = prev ? `${prev}${separator}${tempLine}` : tempLine;
+          contentRef.current = updated;
+          return updated;
+        });
+
+        // 2. Cut audio utterance and refine via Whisper AI for scientific/technical precision & punctuation
+        if (audioRecorderRef.current) {
+          try {
+            setIsTranscribingWhisper(true);
+            const audioBlob = await audioRecorderRef.current.cutUtterance();
+            if (audioBlob) {
+              const settings = await getSetting<AISettings>('ai_settings', {
+                provider: 'groq',
+                apiKey: '',
+              });
+              if (settings.apiKey) {
+                const res = await transcribeAudio(settings, audioBlob, language, contentRef.current);
+                if (res.success && typeof res.result === 'string' && res.result.trim()) {
+                  const refined = res.result.trim();
+                  setContent((prev) => {
+                    if (prev.endsWith(tempLine)) {
+                      const updated = prev.slice(0, prev.length - tempLine.length) + refined;
+                      contentRef.current = updated;
+                      return updated;
+                    } else if (prev.includes(tempLine)) {
+                      const lastIndex = prev.lastIndexOf(tempLine);
+                      const updated = prev.slice(0, lastIndex) + refined + prev.slice(lastIndex + tempLine.length);
+                      contentRef.current = updated;
+                      return updated;
+                    }
+                    return prev;
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            console.warn('Whisper refinement error:', err);
+          } finally {
+            setIsTranscribingWhisper(false);
+          }
+        }
+      }
+    },
+    [engine, language]
+  );
+
   // Speech Recognition for live visual feedback
   useEffect(() => {
     speechServiceRef.current = new SpeechService(
       {
-        onFinalTranscript: async (text) => {
-          const trimmed = text.trim();
+        onFinalTranscript: (text) => {
+          if (silenceDebounceTimerRef.current) {
+            clearTimeout(silenceDebounceTimerRef.current);
+            silenceDebounceTimerRef.current = null;
+          }
+          interimSpeechRef.current = '';
           setInterimContent('');
-          if (!trimmed) return;
-
-          if (engine === 'browser') {
-            setContent((prev) => {
-              const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-              const updated = prev ? `${prev}${separator}${trimmed}` : trimmed;
-              contentRef.current = updated;
-              return updated;
-            });
-          } else if (engine === 'whisper') {
-            // 1. Immediately append the text to editor so it is NEVER lost or discarded
-            const tempLine = trimmed;
-            setContent((prev) => {
-              const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-              const updated = prev ? `${prev}${separator}${tempLine}` : tempLine;
-              contentRef.current = updated;
-              return updated;
-            });
-
-            // 2. Cut clean audio utterance and refine via Whisper AI for scientific/technical precision & punctuation
-            if (audioRecorderRef.current) {
-              try {
-                setIsTranscribingWhisper(true);
-                const audioBlob = await audioRecorderRef.current.cutUtterance();
-                if (audioBlob) {
-                  const settings = await getSetting<AISettings>('ai_settings', {
-                    provider: 'groq',
-                    apiKey: '',
-                  });
-                  if (settings.apiKey) {
-                    const res = await transcribeAudio(settings, audioBlob, language, contentRef.current);
-                    if (res.success && typeof res.result === 'string' && res.result.trim()) {
-                      const refined = res.result.trim();
-                      setContent((prev) => {
-                        if (prev.endsWith(tempLine)) {
-                          const updated = prev.slice(0, prev.length - tempLine.length) + refined;
-                          contentRef.current = updated;
-                          return updated;
-                        } else if (prev.includes(tempLine)) {
-                          const lastIndex = prev.lastIndexOf(tempLine);
-                          const updated = prev.slice(0, lastIndex) + refined + prev.slice(lastIndex + tempLine.length);
-                          contentRef.current = updated;
-                          return updated;
-                        }
-                        return prev;
-                      });
-                    }
-                  }
-                }
-              } catch (err) {
-                console.warn('Whisper refinement error:', err);
-              } finally {
-                setIsTranscribingWhisper(false);
-              }
-            }
+          const trimmed = text.trim();
+          if (trimmed) {
+            commitUtterance(trimmed);
           }
         },
         onInterimTranscript: (text) => {
           setInterimContent(text);
+          interimSpeechRef.current = text;
+
+          // Clear previous silence timer
+          if (silenceDebounceTimerRef.current) {
+            clearTimeout(silenceDebounceTimerRef.current);
+            silenceDebounceTimerRef.current = null;
+          }
+
+          // If speech is detected, start a 1000ms countdown of silence to commit
+          // This guarantees that when the user stops speaking, it NEVER disappears!
+          if (text.trim()) {
+            silenceDebounceTimerRef.current = setTimeout(() => {
+              if (interimSpeechRef.current.trim()) {
+                const speechToCommit = interimSpeechRef.current.trim();
+                interimSpeechRef.current = '';
+                setInterimContent('');
+                commitUtterance(speechToCommit);
+              }
+            }, 1000);
+          }
         },
         onStateChange: (state) => {
           setSpeechState(state);
@@ -215,7 +256,7 @@ export function App() {
     return () => {
       speechServiceRef.current?.stop();
     };
-  }, [engine, language]);
+  }, [engine, language, commitUtterance]);
 
   // Timer loop when recording
   useEffect(() => {
@@ -299,6 +340,16 @@ export function App() {
   };
 
   const handleStop = async () => {
+    if (silenceDebounceTimerRef.current) {
+      clearTimeout(silenceDebounceTimerRef.current);
+      silenceDebounceTimerRef.current = null;
+    }
+    if (interimSpeechRef.current.trim()) {
+      const remainingSpeech = interimSpeechRef.current.trim();
+      interimSpeechRef.current = '';
+      await commitUtterance(remainingSpeech);
+    }
+
     speechServiceRef.current?.stop();
     setInterimContent('');
 
