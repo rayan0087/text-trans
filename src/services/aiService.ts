@@ -284,12 +284,12 @@ export async function transcribeAudio(
   const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
   const langCode = language.startsWith('id') ? 'id' : 'en';
 
-  // Base prompt priming for Indonesian conversation, scientific terminology, tech jargon, and punctuation
-  const BASE_SCIENTIFIC_PRIMER =
-    'Transkripsi percakapan bahasa Indonesia formal dan kasual. Sangat akurat pada istilah sains, biologi, kedokteran, teknologi, komputer, internet, istilah bahasa Inggris, akronim, dan kata serapan (contoh: DNA, RNA, fotosintesis, algoritma, backend, frontend, API, server, database, deploy, rework, bug, bandwidth, CPU, GPU, DNS, localhost). Tanda baca lengkap dan rapi (titik, koma, huruf kapital).';
+  // Adaptive natural Indonesian primer (balances casual speech, business/office terms, and tech jargon automatically without extra user input)
+  const ADAPTIVE_INDONESIAN_PRIMER =
+    'Transkrip percakapan bahasa Indonesia alami, santai maupun formal. Sangat akurat menangkap kosakata lisan sehari-hari (enggak, gak, gimana, kayak, sih, nah, cuman, gitu, iya), singkatan kantor & akuntansi (COA, ATK, SOP, PPN, HRD, beban, biaya, laporan), istilah teknologi (backend, frontend, database, API, deploy, server), dan tanda baca lengkap.';
 
   const contextTail = contextPrompt && contextPrompt.trim() ? ` Konteks sebelumnya: ${contextPrompt.slice(-200)}` : '';
-  const finalPrompt = `${BASE_SCIENTIFIC_PRIMER}${contextTail}`.slice(-440);
+  const finalPrompt = `${ADAPTIVE_INDONESIAN_PRIMER}${contextTail}`.slice(-440);
 
   const fileName = (audioBlob as any).name || 
     (audioBlob.type?.includes('mp3') ? 'audio.mp3' :
