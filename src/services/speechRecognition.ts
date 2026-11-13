@@ -49,15 +49,6 @@ export class SpeechService {
       this.lastInterimText = '';
       this.callbacks.onInterimTranscript('');
       this.callbacks.onFinalTranscript(textToCommit);
-
-      // Reset recognition stream so Chrome flushes its internal resultIndex
-      if (this.isListening && !this.isPaused && this.recognition) {
-        try {
-          this.recognition.stop();
-        } catch (e) {
-          // ignore
-        }
-      }
     }
   }
 
@@ -115,13 +106,8 @@ export class SpeechService {
             this.clearSilenceTimer();
             this.silenceTimer = setTimeout(() => {
               this.flushInterim();
-            }, 1200);
+            }, 800);
           }
-        } else if (!finalStr.trim()) {
-          this.clearSilenceTimer();
-          this.currentInterim = '';
-          this.lastInterimText = '';
-          this.callbacks.onInterimTranscript('');
         }
       };
 
