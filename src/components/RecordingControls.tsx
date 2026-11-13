@@ -21,6 +21,7 @@ interface RecordingControlsProps {
   isTranscribingWhisper: boolean;
   onUploadAudio?: (file: File) => void;
   isUploadingAudio?: boolean;
+  audioLevel?: number;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
@@ -35,6 +36,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   isTranscribingWhisper,
   onUploadAudio,
   isUploadingAudio = false,
+  audioLevel = 0,
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -69,8 +71,8 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           </span>
         </div>
 
-        {/* Audio Visualizer */}
-        <AudioVisualizer isRecording={speechState === 'recording'} isPaused={speechState === 'paused'} />
+        {/* Audio Visualizer with live volume sensitivity */}
+        <AudioVisualizer isRecording={speechState === 'recording'} isPaused={speechState === 'paused'} audioLevel={audioLevel} />
 
         {/* Timer display */}
         <div className="font-mono text-base font-bold text-slate-700 bg-slate-100 px-3 py-1 rounded-lg">

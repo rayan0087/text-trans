@@ -61,8 +61,11 @@ export class AudioRecorderService {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: true,
+          // Disable aggressive noise suppression so softer voices / whispering aren't treated as noise and eliminated
+          noiseSuppression: false,
+          // Force autoGainControl so soft voices are automatically boosted
           autoGainControl: true,
+          channelCount: 1,
         },
       });
     }
@@ -264,6 +267,20 @@ export class AudioRecorderService {
         this.stream = null;
       }
     });
+  }
+
+  public getAudioLevel(): number {
+    if (!this.analyser) return 0;
+    const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.getByteFrequencyData(dataArray);
+    let sum = 0;
+    // Calculate average volume across frequency bins
+    for (let i = 0; i < dataArray.length; i++) {
+      sum += dataArray[i];
+    }
+    const avg = sum / dataArray.length;
+    // Return normalized percentage (0 to 100)
+    return Math.min(100, Math.round((avg / 128) * 100));
   }
 
   public getFullAudioBlob(): Blob {

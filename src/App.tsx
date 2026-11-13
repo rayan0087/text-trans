@@ -198,18 +198,32 @@ export function App() {
     };
   }, [engine, language, commitUtterance]);
 
-  // Timer loop when recording
+  const [audioLevel, setAudioLevel] = useState(0);
+
+  // Timer loop & Mic volume level polling when recording
   useEffect(() => {
     let interval: any = null;
+    let levelInterval: any = null;
+
     if (speechState === 'recording') {
       interval = setInterval(() => {
         setDurationSeconds((sec) => sec + 1);
       }, 1000);
+
+      levelInterval = setInterval(() => {
+        if (audioRecorderRef.current) {
+          const level = audioRecorderRef.current.getAudioLevel();
+          setAudioLevel(level);
+        }
+      }, 100);
     } else {
+      setAudioLevel(0);
       if (interval) clearInterval(interval);
+      if (levelInterval) clearInterval(levelInterval);
     }
     return () => {
       if (interval) clearInterval(interval);
+      if (levelInterval) clearInterval(levelInterval);
     };
   }, [speechState]);
 
@@ -242,26 +256,18 @@ export function App() {
 
   // Controls Handlers
   const handleStart = async () => {
+    // 1. Ensure live recognition always starts immediately so user can talk without lag
+    speechServiceRef.current?.setLanguage(language);
+    speechServiceRef.current?.start();
+
+    // 2. Start hardware audio recorder in parallel
     if (engine === 'whisper') {
-      const settings = await getSetting<AISettings>('ai_settings', {
-        provider: 'groq',
-        apiKey: '',
-      });
-      if (!settings.apiKey) {
-        setIsSettingsOpen(true);
-        alert('Silakan masukkan API Key (Groq / OpenAI / Gemini) terlebih dahulu di Pengaturan untuk mengaktifkan transkripsi akurat Whisper AI.');
-        return;
-      }
       try {
         await audioRecorderRef.current?.start();
       } catch (err: any) {
-        alert(`Gagal mengakses mikrofon untuk perekaman audio: ${err.message}`);
-        return;
+        console.warn('AudioRecorder start warning:', err);
       }
     }
-
-    speechServiceRef.current?.setLanguage(language);
-    speechServiceRef.current?.start();
   };
 
   const handlePause = () => {
@@ -494,6 +500,7 @@ export function App() {
           isTranscribingWhisper={isTranscribingWhisper}
           onUploadAudio={handleUploadAudio}
           isUploadingAudio={isUploadingAudio}
+          audioLevel={audioLevel}
         />
 
         {/* 2. Main Live Transcript Editor with Sentence Dialog View */}
