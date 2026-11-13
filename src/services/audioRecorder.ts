@@ -1,5 +1,6 @@
 export interface AudioRecorderOptions {
   onChunkReady?: (audioBlob: Blob) => void;
+  onVolumeChange?: (volume: number, isSpeaking: boolean) => void;
   silenceThresholdMs?: number;
   maxChunkDurationMs?: number;
   enableVAD?: boolean;
@@ -24,8 +25,8 @@ export class AudioRecorderService {
   constructor(options: AudioRecorderOptions = {}) {
     this.options = {
       silenceThresholdMs: 1200, // 1.2s silence after speaking
-      maxChunkDurationMs: 8000,  // max 8s per chunk
-      enableVAD: false,          // disabled by default when external speech recognition coordinates
+      maxChunkDurationMs: 15000, // up to 15s before finding a pause
+      enableVAD: true,           // enabled by default for pure Whisper live recording
       ...options,
     };
   }
@@ -108,35 +109,40 @@ export class AudioRecorderService {
             }
             const avgVoiceVolume = voiceSum / (maxBin - minBin);
 
+            const isSpeakingNow = avgVoiceVolume > 14;
+            if (this.options.onVolumeChange) {
+              this.options.onVolumeChange(avgVoiceVolume, isSpeakingNow);
+            }
+
             const now = Date.now();
             const chunkDuration = now - this.chunkStartTime;
 
-            if (avgVoiceVolume > 12) {
+            if (isSpeakingNow) {
               this.hasSpokenInCurrentChunk = true;
               this.lastSpokeTime = now;
             }
 
             const silenceDuration = now - this.lastSpokeTime;
 
-            // Condition 1: Natural sentence pause
+            // Condition 1: Natural sentence pause (user spoke for at least 1.5s, then fell silent for >= 1200ms)
             const isNaturalPause = 
               this.hasSpokenInCurrentChunk && 
-              chunkDuration >= 2000 && 
-              silenceDuration >= (this.options.silenceThresholdMs || 1100);
+              chunkDuration >= 1500 && 
+              silenceDuration >= (this.options.silenceThresholdMs || 1200);
 
-            // Condition 2: Max duration cap reached (default 8s) while speaking
+            // Condition 2: Max duration cap reached (default 15s) while speaking, catch brief 400ms pause
             const isMaxDuration = 
               this.hasSpokenInCurrentChunk && 
-              chunkDuration >= (this.options.maxChunkDurationMs || 8000) &&
+              chunkDuration >= (this.options.maxChunkDurationMs || 15000) &&
               silenceDuration >= 400;
 
-            // Condition 3: Hard limit (10s)
-            const isHardLimit = this.hasSpokenInCurrentChunk && chunkDuration >= 10000;
+            // Condition 3: Hard limit (25s) to prevent oversized payloads
+            const isHardLimit = this.hasSpokenInCurrentChunk && chunkDuration >= 25000;
 
             if ((isNaturalPause || isMaxDuration || isHardLimit) && this.options.onChunkReady) {
               this.sliceAndEmitCurrentChunk();
             }
-          }, 150);
+          }, 120);
         }
       }
     } catch (err) {

@@ -284,9 +284,9 @@ export async function transcribeAudio(
   const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
   const langCode = language.startsWith('id') ? 'id' : 'en';
 
-  // Adaptive natural Indonesian primer (balances casual speech, business/office terms, and tech jargon automatically without extra user input)
+  // Adaptive natural Indonesian primer (balances casual speech, business/office terms, ERP, procurement, and tech jargon automatically without extra user input)
   const ADAPTIVE_INDONESIAN_PRIMER =
-    'Transkrip percakapan bahasa Indonesia alami, santai maupun formal. Sangat akurat menangkap kosakata lisan sehari-hari (enggak, gak, gimana, kayak, sih, nah, cuman, gitu, iya), singkatan kantor & akuntansi (COA, ATK, SOP, PPN, HRD, beban, biaya, laporan), istilah teknologi (backend, frontend, database, API, deploy, server), dan tanda baca lengkap.';
+    'Transkrip percakapan bahasa Indonesia alami, rapat kerja, pengadaan barang, sistem ERP, proyek, dan bisnis. Sangat akurat menangkap kosakata lisan sehari-hari (enggak, gak, gimana, kayak, sih, nah, cuman, gitu, iya), istilah kantor & proyek (AJG, EPC, RKM, PB, PR, RFQ, PO, ETA, PIC, SOP, PPN, beban, biaya, vendor, partially approve), istilah teknologi (backend, database, API), dan tanda baca lengkap.';
 
   const contextTail = contextPrompt && contextPrompt.trim() ? ` Konteks sebelumnya: ${contextPrompt.slice(-200)}` : '';
   const finalPrompt = `${ADAPTIVE_INDONESIAN_PRIMER}${contextTail}`.slice(-440);

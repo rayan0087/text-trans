@@ -1,13 +1,12 @@
 import React, { useRef } from 'react';
-import { Mic, Pause, Play, Square, Globe2, AlertTriangle, Sparkles, Zap, Loader2, Upload } from 'lucide-react';
-import { type SpeechState } from '../services/speechRecognition';
+import { Mic, Pause, Play, Square, Globe2, Sparkles, Loader2, Upload } from 'lucide-react';
 import { AudioVisualizer } from './AudioVisualizer';
 import { formatDuration } from '../services/exportService';
 
-export type TranscriptionEngine = 'browser' | 'whisper';
+export type RecordingState = 'idle' | 'recording' | 'paused';
 
 interface RecordingControlsProps {
-  speechState: SpeechState;
+  recordingState: RecordingState;
   durationSeconds: number;
   language: string;
   onLanguageChange: (lang: string) => void;
@@ -15,16 +14,13 @@ interface RecordingControlsProps {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
-  isSupported: boolean;
-  engine: TranscriptionEngine;
-  onEngineChange: (engine: TranscriptionEngine) => void;
-  isTranscribingWhisper: boolean;
+  isTranscribing: boolean;
   onUploadAudio?: (file: File) => void;
   isUploadingAudio?: boolean;
 }
 
 export const RecordingControls: React.FC<RecordingControlsProps> = ({
-  speechState,
+  recordingState,
   durationSeconds,
   language,
   onLanguageChange,
@@ -32,10 +28,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onPause,
   onResume,
   onStop,
-  isSupported,
-  engine,
-  onEngineChange,
-  isTranscribingWhisper,
+  isTranscribing,
   onUploadAudio,
   isUploadingAudio = false,
 }) => {
@@ -48,98 +41,59 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     }
     if (e.target) e.target.value = '';
   };
-  if (!isSupported && engine === 'browser') {
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3 text-amber-800 text-xs">
-        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-        <div>
-          <p className="font-semibold text-amber-900">Browser Tidak Mendukung Web Speech API</p>
-          <p className="mt-0.5">
-            Gunakan mode <strong>Whisper AI</strong> atau buka di <strong>Google Chrome / Edge</strong>.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 flex flex-wrap items-center justify-between gap-4">
       {/* Left side: Status badge, Engine badge & Timer */}
       <div className="flex items-center flex-wrap gap-3 sm:gap-4">
         <div className="flex items-center gap-2">
-          {speechState === 'recording' && (
+          {recordingState === 'recording' && (
             <span className="relative flex h-3 w-3">
               <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
               <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-500"></span>
             </span>
           )}
-          {speechState === 'paused' && (
+          {recordingState === 'paused' && (
             <span className="inline-flex rounded-full h-3 w-3 bg-amber-400"></span>
           )}
-          {speechState === 'idle' && (
+          {recordingState === 'idle' && (
             <span className="inline-flex rounded-full h-3 w-3 bg-slate-300"></span>
           )}
 
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            {speechState === 'recording' ? 'Merekam...' : speechState === 'paused' ? 'Dijeda' : 'Siap'}
+            {recordingState === 'recording' ? 'Merekam...' : recordingState === 'paused' ? 'Dijeda' : 'Siap'}
           </span>
         </div>
 
         {/* Audio Visualizer */}
-        <AudioVisualizer isRecording={speechState === 'recording'} isPaused={speechState === 'paused'} />
+        <AudioVisualizer isRecording={recordingState === 'recording'} isPaused={recordingState === 'paused'} />
 
         {/* Timer display */}
         <div className="font-mono text-base font-bold text-slate-700 bg-slate-100 px-3 py-1 rounded-lg">
           {formatDuration(durationSeconds)}
         </div>
 
-        {/* Engine Switcher */}
-        <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs font-semibold">
-          <button
-            type="button"
-            disabled={speechState !== 'idle'}
-            onClick={() => onEngineChange('browser')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all ${
-              engine === 'browser'
-                ? 'bg-white text-slate-800 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-            title="Browser Web Speech API: Instan & 100% Gratis"
-          >
-            <Zap className="w-3.5 h-3.5 text-amber-500" />
-            <span>Browser</span>
-          </button>
-          <button
-            type="button"
-            disabled={speechState !== 'idle'}
-            onClick={() => onEngineChange('whisper')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all ${
-              engine === 'whisper'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-500 hover:text-indigo-600'
-            }`}
-            title="Whisper AI: Akurasi Tinggi (Groq/OpenAI/Gemini)"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-indigo-300" />
-            <span>Whisper AI</span>
-          </button>
+        {/* Dedicated Whisper AI Engine Badge */}
+        <div className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200/80 rounded-xl text-xs font-semibold text-indigo-700 shadow-xs">
+          <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+          <span>Whisper AI</span>
         </div>
 
-        {isTranscribingWhisper && (
+        {isTranscribing && (
           <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold rounded-lg animate-pulse">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-            <span>Mentranskrip dengan Whisper AI...</span>
+            <span>Memproses Whisper AI...</span>
           </div>
         )}
       </div>
 
       {/* Right side: Action Buttons & Language */}
       <div className="flex items-center gap-2.5">
-        {speechState === 'idle' && (
+        {recordingState === 'idle' && (
           <>
             <button
               onClick={onStart}
-              disabled={isTranscribingWhisper || isUploadingAudio}
+              disabled={isTranscribing || isUploadingAudio}
               className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 hover:shadow-rose-300 transition-all active:scale-95 disabled:opacity-50"
             >
               <Mic className="w-4 h-4" />
@@ -149,7 +103,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isTranscribingWhisper || isUploadingAudio}
+              disabled={isTranscribing || isUploadingAudio}
               className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 shadow-xs"
               title="Unggah file rekaman audio (.mp3, .wav, .m4a, .webm, .mp4, dll) untuk ditranskripsi"
             >
@@ -165,13 +119,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
               type="file"
               ref={fileInputRef}
               onChange={handleFileChange}
-              accept="audio/*,video/mp4,video/webm,.mp3,.wav,.m4a,.ogg,.webm,.mp4"
+              accept="audio/*,video/mp4,video/webm,.mp3,.wav,.m4a,.ogg,.webm,.mp4,.aac"
               className="hidden"
             />
           </>
         )}
 
-        {speechState === 'recording' && (
+        {recordingState === 'recording' && (
           <>
             <button
               onClick={onPause}
@@ -190,7 +144,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           </>
         )}
 
-        {speechState === 'paused' && (
+        {recordingState === 'paused' && (
           <>
             <button
               onClick={onResume}
@@ -215,7 +169,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           <select
             value={language}
             onChange={(e) => onLanguageChange(e.target.value)}
-            disabled={speechState !== 'idle'}
+            disabled={recordingState !== 'idle'}
             className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 cursor-pointer"
           >
             <option value="id-ID">🇮🇩 Indonesia</option>
