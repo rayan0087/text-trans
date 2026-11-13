@@ -1,14 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Check, FileText, CheckSquare, Trash, MessageSquare, Edit3, UserCheck, Loader2 } from 'lucide-react';
+import { Check, FileText, CheckSquare, Trash, MessageSquare, Edit3, UserCheck } from 'lucide-react';
 
 interface TranscriptEditorProps {
   title: string;
   onTitleChange: (newTitle: string) => void;
   content: string;
+  interimContent: string;
   onContentChange: (newContent: string) => void;
   isRecording: boolean;
-  isTranscribing?: boolean;
-  isSpeaking?: boolean;
   aiSummary?: string;
   aiActionItems?: string;
   onClearAiSummary?: () => void;
@@ -19,10 +18,9 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   title,
   onTitleChange,
   content,
+  interimContent,
   onContentChange,
   isRecording,
-  isTranscribing = false,
-  isSpeaking = false,
   aiSummary,
   aiActionItems,
   onClearAiSummary,
@@ -45,7 +43,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     if (isRecording && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [content, isRecording, isTranscribing]);
+  }, [content, interimContent, isRecording]);
 
   const handleRenameSpeaker = (oldName: string) => {
     if (!editingSpeakerNew.trim() || editingSpeakerNew.trim() === oldName) {
@@ -186,34 +184,27 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
         {/* Main Content Area */}
         {viewMode === 'dialog' ? (
           <div className="flex-1 min-h-[220px] space-y-2.5">
-            {lines.length === 0 && !isRecording && !isTranscribing ? (
+            {lines.length === 0 && !interimContent ? (
               <div
                 onClick={() => setViewMode('raw')}
                 className="py-12 text-center text-slate-300 text-sm cursor-pointer hover:text-slate-400"
               >
-                Mulai bicara, teks Anda akan otomatis tertulis rapi per baris dengan garis di samping. Klik di sini untuk mengetik manual...
+                {isRecording
+                  ? 'Sedang merekam suara Anda... Begitu Anda jeda bicara, kalimat akurat Whisper akan otomatis muncul di sini.'
+                  : 'Mulai bicara, teks Anda akan otomatis tertulis rapi per baris dengan garis di samping. Klik di sini untuk mengetik manual...'}
               </div>
             ) : (
               <>
                 {lines.map((line, idx) => renderDialogLine(line, idx))}
-
-                {isTranscribing && (
-                  <div className="border-l-[3px] border-indigo-500 bg-indigo-50/70 pl-3.5 py-2 rounded-r-lg text-indigo-700 animate-pulse flex items-center gap-2 text-sm font-medium transition-all">
-                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
-                    <span>Mentranskripsikan kalimat dengan Whisper AI...</span>
-                  </div>
-                )}
-
-                {isRecording && !isTranscribing && (
-                  <div className="border-l-[3px] border-rose-400 bg-rose-50/40 pl-3.5 py-2 rounded-r-lg text-slate-700 flex items-center gap-2 text-sm transition-all">
-                    <span className="relative flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-rose-500"></span>
-                    </span>
-                    <span className="font-semibold text-rose-700 text-xs uppercase tracking-wider">
-                      {isSpeaking ? 'Mendengarkan ucapan...' : 'Menunggu suara...'}
-                    </span>
-                    <span className="text-slate-400 italic text-xs hidden sm:inline">• Kalimat akan otomatis tercatat saat jeda bicara</span>
+                {interimContent && (
+                  <div className="border-l-[3px] border-amber-400 bg-amber-50/50 pl-3.5 py-1.5 rounded-r-lg text-slate-700 animate-pulse transition-all">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className="text-[10px] font-bold text-amber-700 bg-amber-100/90 px-1.5 py-0.5 rounded flex items-center gap-1 uppercase tracking-wider">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping inline-block" />
+                        Bicara Aktif
+                      </span>
+                    </div>
+                    <p className="text-[15px] italic text-slate-600 leading-relaxed">&ldquo;{interimContent}&rdquo;</p>
                   </div>
                 )}
               </>
