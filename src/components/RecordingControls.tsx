@@ -79,41 +79,32 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           {formatDuration(durationSeconds)}
         </div>
 
-        {/* Dynamic Mic Level Badge replacing the old Whisper AI badge */}
+        {/* Dynamic Mic Level Badge (icon mic with dynamic red level) */}
         <div 
-          className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all duration-150 ${
+          className={`flex items-center justify-center p-2 rounded-xl border transition-all duration-150 ${
             speechState === 'recording'
-              ? 'bg-rose-50/90 border-rose-200 text-rose-700 shadow-xs'
-              : 'bg-slate-50 border-slate-200 text-slate-500'
+              ? 'bg-rose-50/90 border-rose-200 text-rose-700 shadow-xs ring-2 ring-rose-500/20'
+              : 'bg-slate-50 border-slate-200 text-slate-400'
           }`}
           title={speechState === 'recording' ? `Level Suara: ${audioLevel}%` : 'Mikrofon Siap'}
         >
           {/* Mic icon with dynamic vertical red liquid fill based on audioLevel */}
-          <div className="relative w-4 h-4 flex items-center justify-center shrink-0">
+          <div className="relative w-5 h-5 flex items-center justify-center shrink-0">
             {/* Background base icon (gray/muted) */}
-            <Mic className={`w-4 h-4 ${speechState === 'recording' ? 'text-rose-300' : 'text-slate-400'}`} />
+            <Mic className={`w-5 h-5 ${speechState === 'recording' ? 'text-rose-200' : 'text-slate-400'}`} />
             
             {/* Overlay filled icon (red) clipped from bottom according to audioLevel */}
             {speechState === 'recording' && (
               <div 
                 className="absolute inset-0 overflow-hidden transition-all duration-75 ease-out"
                 style={{
-                  clipPath: `inset(${Math.max(0, 100 - Math.min(100, Math.round(15 + (audioLevel / 100) * 85)))}% 0 0 0)`
+                  clipPath: `inset(${Math.max(0, 100 - Math.min(100, Math.round(20 + (audioLevel / 100) * 80)))}% 0 0 0)`
                 }}
               >
-                <Mic className="w-4 h-4 text-rose-600 fill-rose-600" />
+                <Mic className="w-5 h-5 text-rose-600 fill-rose-600 drop-shadow-[0_0_4px_rgba(225,29,72,0.4)]" />
               </div>
             )}
           </div>
-
-          {/* Level text / status */}
-          <span className="font-medium tracking-tight">
-            {speechState === 'recording' ? (
-              <span>Suara: <strong className="font-mono text-rose-600">{audioLevel}%</strong></span>
-            ) : (
-              <span>Whisper AI</span>
-            )}
-          </span>
         </div>
 
         {isTranscribingWhisper && (
