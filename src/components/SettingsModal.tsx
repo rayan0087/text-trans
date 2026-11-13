@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { X, Key, ShieldCheck, ExternalLink, Save, CheckCircle2, RefreshCw, Loader2 } from 'lucide-react';
+import { X, Key, ShieldCheck, ExternalLink, Save, CheckCircle2 } from 'lucide-react';
 import { 
   type AIProvider, 
   type AISettings, 
   detectProviderFromKey, 
-  DEFAULT_MODELS, 
-  fetchAvailableModels 
+  DEFAULT_MODELS 
 } from '../services/aiService';
 import { getSetting, setSetting } from '../db';
 
@@ -18,9 +17,6 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSaved }) => {
   const [provider, setProvider] = useState<AIProvider>('groq');
   const [apiKey, setApiKey] = useState('');
-  const [customModel, setCustomModel] = useState('');
-  const [modelsList, setModelsList] = useState<string[]>(DEFAULT_MODELS.groq);
-  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   useEffect(() => {
@@ -35,38 +31,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       provider: 'groq',
       apiKey: '',
     });
-    const currentProv = saved.provider || 'groq';
-    setProvider(currentProv);
+    setProvider(saved.provider || 'groq');
     setApiKey(saved.apiKey || '');
-    setCustomModel(saved.customModel || DEFAULT_MODELS[currentProv][0]);
-    setModelsList(DEFAULT_MODELS[currentProv]);
-
-    // If key exists, automatically fetch active models
-    if (saved.apiKey) {
-      loadModelsFor(currentProv, saved.apiKey, saved.customModel);
-    }
-  };
-
-  const loadModelsFor = async (prov: AIProvider, key: string, keepSelected?: string) => {
-    if (!key.trim()) {
-      setModelsList(DEFAULT_MODELS[prov]);
-      return;
-    }
-    setIsLoadingModels(true);
-    try {
-      const fetched = await fetchAvailableModels(prov, key);
-      setModelsList(fetched);
-      if (keepSelected && fetched.includes(keepSelected)) {
-        setCustomModel(keepSelected);
-      } else if (fetched.length > 0) {
-        setCustomModel(fetched[0]);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch models:', e);
-      setModelsList(DEFAULT_MODELS[prov]);
-    } finally {
-      setIsLoadingModels(false);
-    }
   };
 
   const handleKeyChange = (val: string) => {
@@ -74,15 +40,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     const detected = detectProviderFromKey(val);
     if (detected && detected !== provider) {
       setProvider(detected);
-      loadModelsFor(detected, val);
-    } else if (val.trim()) {
-      loadModelsFor(provider, val);
     }
   };
 
   const handleProviderSelect = (newProv: AIProvider) => {
     setProvider(newProv);
-    loadModelsFor(newProv, apiKey);
   };
 
   const handleSave = async (e: React.FormEvent) => {
@@ -91,7 +53,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     const settings: AISettings = {
       provider: actualProvider,
       apiKey: apiKey.trim(),
-      customModel: customModel.trim() || undefined,
+      // Model otomatis dipilihkan yang paling direkomendasikan & tercepat
+      customModel: DEFAULT_MODELS[actualProvider][0],
     };
     await setSetting('ai_settings', settings);
     setSavedSuccess(true);
@@ -237,47 +200,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             </div>
           </div>
 
-          {/* 3. Model Selection Dropdown */}
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">
-                Pilihan Model
-              </label>
-              <button
-                type="button"
-                onClick={() => loadModelsFor(provider, apiKey)}
-                disabled={isLoadingModels || !apiKey.trim()}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 disabled:opacity-40 transition-colors"
-                title="Ambil daftar model yang tersedia langsung dari akun API Anda"
-              >
-                {isLoadingModels ? (
-                  <>
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    <span>Mengambil...</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Muat Ulang Model Akun</span>
-                  </>
-                )}
-              </button>
-            </div>
-
-            <select
-              value={customModel}
-              onChange={(e) => setCustomModel(e.target.value)}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-all cursor-pointer"
-            >
-              {modelsList.map((m) => (
-                <option key={m} value={m}>
-                  {m} {m === DEFAULT_MODELS[provider][0] ? '(Direkomendasikan)' : ''}
-                </option>
-              ))}
-            </select>
-            <p className="text-[11px] text-slate-400 mt-1">
-              Model dipilih otomatis dari akun Anda. Tidak perlu mengetik manual.
-            </p>
+          {/* Automatic Model Optimization Note */}
+          <div className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-600">
+            <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>
+              Model otomatis di-set ke opsi tercepat & terakurat (<strong>{provider === 'groq' ? 'Whisper Large v3 Turbo & LLaMA 3.3 70B' : provider === 'gemini' ? 'Gemini 1.5 Flash' : 'GPT-4o Mini & Whisper'}</strong>).
+            </span>
           </div>
 
           {/* Footer Actions */}
