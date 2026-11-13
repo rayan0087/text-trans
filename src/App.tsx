@@ -109,14 +109,7 @@ export function App() {
   useEffect(() => {
     setIsSupported(SpeechService.isSupported());
     audioRecorderRef.current = new AudioRecorderService();
-
-    getSetting<AISettings>('ai_settings', { provider: 'groq', apiKey: '' }).then((saved) => {
-      if (saved && saved.apiKey) {
-        setEngine('whisper');
-      } else {
-        setEngine('browser');
-      }
-    });
+    setEngine('whisper');
   }, []);
 
   // Commit an utterance into the transcript (strictly and faithfully records what was in "Bicara Aktif" with smart deduplication)

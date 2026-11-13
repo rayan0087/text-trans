@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Mic, Pause, Play, Square, Globe2, AlertTriangle, Sparkles, Zap, Loader2, Upload } from 'lucide-react';
+import { Mic, Pause, Play, Square, Globe2, Sparkles, Loader2, Upload } from 'lucide-react';
 import { type SpeechState } from '../services/speechRecognition';
 import { AudioVisualizer } from './AudioVisualizer';
 import { formatDuration } from '../services/exportService';
@@ -15,9 +15,9 @@ interface RecordingControlsProps {
   onPause: () => void;
   onResume: () => void;
   onStop: () => void;
-  isSupported: boolean;
-  engine: TranscriptionEngine;
-  onEngineChange: (engine: TranscriptionEngine) => void;
+  isSupported?: boolean;
+  engine?: TranscriptionEngine;
+  onEngineChange?: (engine: TranscriptionEngine) => void;
   isTranscribingWhisper: boolean;
   onUploadAudio?: (file: File) => void;
   isUploadingAudio?: boolean;
@@ -32,9 +32,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   onPause,
   onResume,
   onStop,
-  isSupported,
-  engine,
-  onEngineChange,
   isTranscribingWhisper,
   onUploadAudio,
   isUploadingAudio = false,
@@ -48,19 +45,6 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
     }
     if (e.target) e.target.value = '';
   };
-  if (!isSupported && engine === 'browser') {
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-center gap-3 text-amber-800 text-xs">
-        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
-        <div>
-          <p className="font-semibold text-amber-900">Browser Tidak Mendukung Web Speech API</p>
-          <p className="mt-0.5">
-            Gunakan mode <strong>Whisper AI</strong> atau buka di <strong>Google Chrome / Edge</strong>.
-          </p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 flex flex-wrap items-center justify-between gap-4">
@@ -93,36 +77,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           {formatDuration(durationSeconds)}
         </div>
 
-        {/* Engine Switcher */}
-        <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs font-semibold">
-          <button
-            type="button"
-            disabled={speechState !== 'idle'}
-            onClick={() => onEngineChange('browser')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all ${
-              engine === 'browser'
-                ? 'bg-white text-slate-800 shadow-xs'
-                : 'text-slate-500 hover:text-slate-800'
-            }`}
-            title="Browser Web Speech API: Instan & 100% Gratis"
-          >
-            <Zap className="w-3.5 h-3.5 text-amber-500" />
-            <span>Browser</span>
-          </button>
-          <button
-            type="button"
-            disabled={speechState !== 'idle'}
-            onClick={() => onEngineChange('whisper')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg transition-all ${
-              engine === 'whisper'
-                ? 'bg-indigo-600 text-white shadow-xs'
-                : 'text-slate-500 hover:text-indigo-600'
-            }`}
-            title="Whisper AI: Akurasi Tinggi (Groq/OpenAI/Gemini)"
-          >
-            <Sparkles className="w-3.5 h-3.5 text-indigo-300" />
-            <span>Whisper AI</span>
-          </button>
+        {/* Dedicated Whisper AI Badge */}
+        <div className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200/80 rounded-xl text-xs font-semibold text-indigo-700 shadow-xs">
+          <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+          <span>Whisper AI</span>
         </div>
 
         {isTranscribingWhisper && (
