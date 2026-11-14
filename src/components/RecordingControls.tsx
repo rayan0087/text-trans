@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { Mic, Pause, Play, Square, Globe2, Loader2, Upload } from 'lucide-react';
+import { Mic, Pause, Play, Square, Loader2, Upload } from 'lucide-react';
 import { type SpeechState } from '../services/speechRecognition';
 import { AudioVisualizer } from './AudioVisualizer';
 import { formatDuration } from '../services/exportService';
@@ -49,7 +49,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-4 flex flex-wrap items-center justify-between gap-4">
+    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs p-4 flex flex-wrap items-center justify-between gap-4 transition-colors">
       {/* Left side: Status badge, Engine badge & Timer */}
       <div className="flex items-center flex-wrap gap-3 sm:gap-4">
         <div className="flex items-center gap-2">
@@ -63,10 +63,10 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
             <span className="inline-flex rounded-full h-3 w-3 bg-amber-400"></span>
           )}
           {speechState === 'idle' && (
-            <span className="inline-flex rounded-full h-3 w-3 bg-slate-300"></span>
+            <span className="inline-flex rounded-full h-3 w-3 bg-slate-300 dark:bg-slate-700"></span>
           )}
 
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
             {speechState === 'recording' ? 'Merekam...' : speechState === 'paused' ? 'Dijeda' : 'Siap'}
           </span>
         </div>
@@ -75,54 +75,63 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
         <AudioVisualizer isRecording={speechState === 'recording'} isPaused={speechState === 'paused'} audioLevel={audioLevel} />
 
         {/* Timer display */}
-        <div className="font-mono text-base font-bold text-slate-700 bg-slate-100 px-3 py-1 rounded-lg">
+        <div className="font-mono text-base font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 px-3 py-1 rounded-lg">
           {formatDuration(durationSeconds)}
         </div>
 
-        {/* Dynamic Mic Level Badge (icon mic with dynamic red level) */}
+        {/* Dynamic Mic Level Badge with Live Percentage & Liquid Fill */}
         <div 
-          className={`flex items-center justify-center p-2 rounded-xl border transition-all duration-150 ${
+          className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-all duration-150 ${
             speechState === 'recording'
-              ? 'bg-rose-50/90 border-rose-200 text-rose-700 shadow-xs ring-2 ring-rose-500/20'
-              : 'bg-slate-50 border-slate-200 text-slate-400'
+              ? 'bg-rose-50/90 dark:bg-rose-950/50 border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-400 shadow-xs ring-2 ring-rose-500/20'
+              : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-800 text-slate-400 dark:text-slate-500'
           }`}
           title={speechState === 'recording' ? `Level Suara: ${audioLevel}%` : 'Mikrofon Siap'}
         >
           {/* Mic icon with dynamic vertical red liquid fill based on audioLevel */}
-          <div className="relative w-5 h-5 flex items-center justify-center shrink-0">
-            {/* Background base icon (gray/muted) */}
-            <Mic className={`w-5 h-5 ${speechState === 'recording' ? 'text-rose-200' : 'text-slate-400'}`} />
+          <div className="relative w-4 h-4 flex items-center justify-center shrink-0">
+            {/* Background base icon */}
+            <Mic className={`w-4 h-4 ${speechState === 'recording' ? 'text-rose-200 dark:text-rose-900' : 'text-slate-400 dark:text-slate-600'}`} />
             
             {/* Overlay filled icon (red) clipped from bottom according to audioLevel */}
             {speechState === 'recording' && (
               <div 
                 className="absolute inset-0 overflow-hidden transition-all duration-75 ease-out"
                 style={{
-                  clipPath: `inset(${Math.max(0, 100 - Math.min(100, Math.round(20 + (audioLevel / 100) * 80)))}% 0 0 0)`
+                  clipPath: `inset(${Math.max(0, 100 - Math.min(100, Math.round(15 + (audioLevel / 100) * 85)))}% 0 0 0)`
                 }}
               >
-                <Mic className="w-5 h-5 text-rose-600 fill-rose-600 drop-shadow-[0_0_4px_rgba(225,29,72,0.4)]" />
+                <Mic className="w-4 h-4 text-rose-600 fill-rose-600 drop-shadow-[0_0_4px_rgba(225,29,72,0.5)]" />
               </div>
             )}
           </div>
+
+          {/* Real-time Percentage Indicator */}
+          {speechState === 'recording' ? (
+            <span className="font-mono text-[11px] font-bold text-rose-600 dark:text-rose-400 tabular-nums min-w-[28px]">
+              {audioLevel}%
+            </span>
+          ) : (
+            <span className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Mic</span>
+          )}
         </div>
 
         {isTranscribingWhisper && (
-          <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-semibold rounded-lg animate-pulse">
+          <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 dark:bg-indigo-950/50 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-semibold rounded-lg animate-pulse">
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
             <span>Mentranskrip dengan Whisper AI...</span>
           </div>
         )}
       </div>
 
-      {/* Right side: Action Buttons & Language */}
+      {/* Right side: Action Buttons */}
       <div className="flex items-center gap-2.5">
         {speechState === 'idle' && (
           <>
             <button
               onClick={onStart}
               disabled={isTranscribingWhisper || isUploadingAudio}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 hover:shadow-rose-300 transition-all active:scale-95 disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-rose-200 dark:shadow-none hover:shadow-rose-300 transition-all active:scale-95 disabled:opacity-50"
             >
               <Mic className="w-4 h-4" />
               <span>Mulai Rekam</span>
@@ -132,13 +141,13 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isTranscribingWhisper || isUploadingAudio}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200/80 rounded-xl text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 shadow-xs"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800 rounded-xl text-sm font-semibold transition-all active:scale-95 disabled:opacity-50 shadow-xs"
               title="Unggah file rekaman audio (.mp3, .wav, .m4a, .webm, .mp4, dll) untuk ditranskripsi"
             >
               {isUploadingAudio ? (
-                <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                <Loader2 className="w-4 h-4 animate-spin text-indigo-600 dark:text-indigo-400" />
               ) : (
-                <Upload className="w-4 h-4 text-indigo-600" />
+                <Upload className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
               )}
               <span>{isUploadingAudio ? 'Memproses...' : 'Unggah Audio'}</span>
             </button>
@@ -157,14 +166,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           <>
             <button
               onClick={onPause}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-md shadow-amber-200 transition-all active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-sm font-semibold shadow-md shadow-amber-200 dark:shadow-none transition-all active:scale-95"
             >
               <Pause className="w-4 h-4" />
               <span>Jeda</span>
             </button>
             <button
               onClick={onStop}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-semibold shadow-md shadow-slate-300 transition-all active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-xl text-sm font-semibold shadow-md shadow-slate-300 dark:shadow-none transition-all active:scale-95"
             >
               <Square className="w-4 h-4" />
               <span>Selesai Rekam</span>
@@ -176,14 +185,14 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           <>
             <button
               onClick={onResume}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-emerald-200 transition-all active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-semibold shadow-md shadow-emerald-200 dark:shadow-none transition-all active:scale-95"
             >
               <Play className="w-4 h-4" />
               <span>Lanjut</span>
             </button>
             <button
               onClick={onStop}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-sm font-semibold shadow-md shadow-slate-300 transition-all active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-800 hover:bg-slate-900 dark:bg-slate-700 dark:hover:bg-slate-600 text-white rounded-xl text-sm font-semibold shadow-md shadow-slate-300 dark:shadow-none transition-all active:scale-95"
             >
               <Square className="w-4 h-4" />
               <span>Selesai Rekam</span>
@@ -191,19 +200,15 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
           </>
         )}
 
-        {/* Language Selector */}
-        <div className="flex items-center gap-1.5 ml-2 pl-3 border-l border-slate-200">
-          <Globe2 className="w-4 h-4 text-slate-400" />
-          <select
-            value={language}
-            onChange={(e) => onLanguageChange(e.target.value)}
-            disabled={speechState !== 'idle'}
-            className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-50 cursor-pointer"
-          >
-            <option value="id-ID">🇮🇩 Indonesia</option>
-            <option value="en-US">🇺🇸 English</option>
-          </select>
-        </div>
+        {/* Language Selector is made invisible as requested (defaults fixed to Indonesian id-ID) */}
+        <select
+          value={language}
+          onChange={(e) => onLanguageChange(e.target.value)}
+          className="hidden"
+          aria-hidden="true"
+        >
+          <option value="id-ID">Indonesia</option>
+        </select>
       </div>
     </div>
   );

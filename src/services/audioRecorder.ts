@@ -271,16 +271,37 @@ export class AudioRecorderService {
 
   public getAudioLevel(): number {
     if (!this.analyser) return 0;
+    
+    // In many browsers, AudioContext might start in 'suspended' state until resumed
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+
     const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
     this.analyser.getByteFrequencyData(dataArray);
-    let sum = 0;
-    // Calculate average volume across frequency bins
-    for (let i = 0; i < dataArray.length; i++) {
-      sum += dataArray[i];
+    
+    // Focus on human voice frequency bins (typically ~100Hz to ~3500Hz)
+    const minBin = 2;
+    const maxBin = Math.min(45, dataArray.length);
+    let voiceSum = 0;
+    let peak = 0;
+
+    for (let i = minBin; i < maxBin; i++) {
+      const val = dataArray[i];
+      voiceSum += val;
+      if (val > peak) peak = val;
     }
-    const avg = sum / dataArray.length;
-    // Return normalized percentage (0 to 100)
-    return Math.min(100, Math.round((avg / 128) * 100));
+
+    const avgVoice = voiceSum / (maxBin - minBin);
+    // Combine average energy with peak response for lively, responsive visual feedback
+    const combined = (avgVoice * 0.7) + (peak * 0.3);
+
+    // If below noise floor, drop to 0
+    if (combined < 8) return 0;
+
+    // Scale dynamically to 0 - 100%
+    const normalized = Math.round(((combined - 8) / (135 - 8)) * 100);
+    return Math.max(0, Math.min(100, normalized));
   }
 
   public getFullAudioBlob(): Blob {

@@ -57,6 +57,26 @@ export function App() {
   // Modals & UI Layout
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('app_theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  // Sync theme class to html/root
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    localStorage.setItem('app_theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+  };
 
   // Ref to track latest content for speech callbacks without closure traps
   const contentRef = useRef(content);
@@ -215,7 +235,7 @@ export function App() {
           const level = audioRecorderRef.current.getAudioLevel();
           setAudioLevel(level);
         }
-      }, 100);
+      }, 60);
     } else {
       setAudioLevel(0);
       if (interval) clearInterval(interval);
@@ -437,7 +457,7 @@ export function App() {
   };
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-slate-100 font-sans">
+    <div className="flex h-screen w-screen overflow-hidden bg-slate-100 dark:bg-slate-950 font-sans transition-colors">
       {/* Sidebar Navigation */}
       <Sidebar
         transcripts={transcripts}
@@ -448,6 +468,8 @@ export function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
         isOpen={isSidebarOpen}
         onToggleOpen={() => setIsSidebarOpen((v) => !v)}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       {/* Main Workspace Area with Drag and Drop Audio Support */}
@@ -457,17 +479,17 @@ export function App() {
         className="flex-1 flex flex-col h-full overflow-hidden p-3 sm:p-5 lg:p-6 gap-3.5"
       >
         {/* Top Bar on Mobile for sidebar trigger */}
-        <div className="flex lg:hidden items-center justify-between bg-white px-4 py-2.5 rounded-2xl border border-slate-200 shadow-xs">
+        <div className="flex lg:hidden items-center justify-between bg-white dark:bg-slate-900 px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <button
             onClick={() => setIsSidebarOpen(true)}
-            className="flex items-center gap-2 text-xs font-semibold text-slate-700 p-1.5 rounded-lg hover:bg-slate-100"
+            className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
           >
-            <PanelLeft className="w-4 h-4 text-indigo-600" />
+            <PanelLeft className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <span>Riwayat Transkrip</span>
           </button>
           <div className="flex items-center gap-2">
             <img src="/favicon.svg" alt="Logo" className="w-5 h-5 rounded-md" />
-            <span className="text-xs font-bold text-slate-800">Transkrip Kilat</span>
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-100">Transkrip Kilat</span>
           </div>
         </div>
 

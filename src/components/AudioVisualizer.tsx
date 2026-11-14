@@ -11,7 +11,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording, i
     return (
       <div className="flex items-center gap-1 h-6">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="w-1 bg-slate-300 rounded-full h-1.5" />
+          <div key={i} className="w-1 bg-slate-300 dark:bg-slate-700 rounded-full h-1.5" />
         ))}
       </div>
     );
@@ -21,7 +21,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording, i
     return (
       <div className="flex items-center gap-1 h-6">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="w-1 bg-amber-400 rounded-full h-3" />
+          <div key={i} className="w-1 bg-amber-400 dark:bg-amber-500 rounded-full h-3" />
         ))}
       </div>
     );
@@ -39,7 +39,7 @@ export const AudioVisualizer: React.FC<AudioVisualizerProps> = ({ isRecording, i
   ];
 
   return (
-    <div className="flex items-center gap-1 h-7 px-1.5 py-0.5 bg-rose-50/70 border border-rose-100 rounded-lg" title={`Sensitivitas Mic: ${audioLevel}%`}>
+    <div className="flex items-center gap-1 h-7 px-1.5 py-0.5 bg-rose-50/70 dark:bg-rose-950/40 border border-rose-100 dark:border-rose-900/50 rounded-lg" title={`Sensitivitas Mic: ${audioLevel}%`}>
       {barHeights.map((h, i) => (
         <div
           key={i}

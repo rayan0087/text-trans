@@ -103,17 +103,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const detected = detectProviderFromKey(apiKey);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-fadeIn">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 w-full max-w-lg overflow-hidden transition-all">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-fadeIn">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-100 dark:border-slate-800 w-full max-w-lg overflow-hidden transition-colors">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/70">
-          <div className="flex items-center gap-2 text-slate-800 font-semibold text-lg">
-            <Key className="w-5 h-5 text-indigo-600" />
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-900/70">
+          <div className="flex items-center gap-2 text-slate-800 dark:text-slate-100 font-semibold text-lg">
+            <Key className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
             <span>Pengaturan AI (Bring Your Own Key)</span>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-slate-600 rounded-lg p-1 hover:bg-slate-200/50 transition-colors"
+            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg p-1 hover:bg-slate-200/50 dark:hover:bg-slate-800 transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -122,10 +122,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
         {/* Modal Form */}
         <form onSubmit={handleSave} className="p-6 space-y-5">
           {/* Privacy Note */}
-          <div className="flex items-start gap-3 p-3.5 bg-emerald-50 border border-emerald-200/70 rounded-xl text-xs text-emerald-800">
-            <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+          <div className="flex items-start gap-3 p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200/70 dark:border-emerald-900/50 rounded-xl text-xs text-emerald-800 dark:text-emerald-300">
+            <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
             <div>
-              <p className="font-semibold text-emerald-900">100% Aman & Terisolasi di Browser</p>
+              <p className="font-semibold text-emerald-900 dark:text-emerald-200">100% Aman & Terisolasi di Browser</p>
               <p className="mt-0.5 leading-relaxed">
                 API Key Anda hanya disimpan di IndexedDB browser Anda sendiri. Tidak ada server perantara yang merekam data atau suara Anda.
               </p>
@@ -135,14 +135,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           {/* 1. API Key Input First */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+              <label className="text-xs font-semibold uppercase tracking-wider text-slate-700 dark:text-slate-300">
                 Tempelkan API Key Anda
               </label>
               <a
                 href={providerInfo.link}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-700 hover:underline font-medium"
+                className="inline-flex items-center gap-1 text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-medium"
               >
                 <span>{providerInfo.linkText}</span>
                 <ExternalLink className="w-3 h-3" />
@@ -153,16 +153,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               value={apiKey}
               onChange={(e) => handleKeyChange(e.target.value)}
               placeholder="Tempel kunci API Anda di sini (gsk_... / AIzaSy... / sk-...)"
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-all font-mono"
+              className="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-slate-100 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-600 transition-all font-mono"
             />
             {detected && (
-              <p className="text-xs text-emerald-600 font-semibold mt-1.5 flex items-center gap-1">
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 font-semibold mt-1.5 flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>Penyedia otomatis terdeteksi: <strong>{providerInfo.name}</strong></span>
               </p>
             )}
             {!detected && apiKey.trim() && (
-              <p className="text-[11px] text-slate-400 mt-1">
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-1">
                 Pilih penyedia manual di bawah jika format tidak dikenali.
               </p>
             )}
@@ -170,7 +170,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
           {/* 2. Provider Selection Tabs (Optional / Override) */}
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
               Penyedia AI Aktif
             </label>
             <div className="grid grid-cols-3 gap-2">
@@ -185,13 +185,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   onClick={() => handleProviderSelect(item.id as AIProvider)}
                   className={`flex flex-col items-center justify-center p-2.5 rounded-xl border text-xs font-semibold transition-all ${
                     provider === item.id
-                      ? 'border-indigo-600 bg-indigo-50/70 text-indigo-900 ring-2 ring-indigo-500/20 shadow-xs'
-                      : 'border-slate-200 hover:border-slate-300 text-slate-600 hover:bg-slate-50'
+                      ? 'border-indigo-600 bg-indigo-50/70 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 ring-2 ring-indigo-500/20 shadow-xs'
+                      : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
                   }`}
                 >
                   <span>{item.label}</span>
                   <span className={`text-[10px] mt-0.5 px-1.5 py-0.2 rounded-full ${
-                    provider === item.id ? 'bg-indigo-200 text-indigo-800 font-semibold' : 'bg-slate-100 text-slate-500'
+                    provider === item.id ? 'bg-indigo-200 dark:bg-indigo-900 text-indigo-800 dark:text-indigo-200 font-semibold' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
                   }`}>
                     {item.tag}
                   </span>
@@ -201,7 +201,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </div>
 
           {/* Automatic Model Optimization Note */}
-          <div className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-600">
+          <div className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700 rounded-xl text-xs text-slate-600 dark:text-slate-300">
             <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>
               Model otomatis di-set ke opsi tercepat & terakurat (<strong>{provider === 'groq' ? 'Whisper Large v3 Turbo & LLaMA 3.3 70B' : provider === 'gemini' ? 'Gemini 1.5 Flash' : 'GPT-4o Mini & Whisper'}</strong>).
@@ -209,17 +209,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </div>
 
           {/* Footer Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-colors"
+              className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
             >
               Batal
             </button>
             <button
               type="submit"
-              className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm shadow-indigo-200 transition-all active:scale-98"
+              className="inline-flex items-center gap-2 px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-semibold shadow-sm shadow-indigo-200 dark:shadow-none transition-all active:scale-98"
             >
               {savedSuccess ? (
                 <>
