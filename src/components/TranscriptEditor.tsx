@@ -9,13 +9,10 @@ import {
   UserCheck,
   Play,
   Pause,
-  Volume2,
-  Download,
-  RotateCcw,
-  RotateCw,
+  SkipBack,
+  SkipForward,
 } from 'lucide-react';
 import { type TranscriptLineTiming } from '../db';
-import { formatDuration } from '../services/exportService';
 
 interface TranscriptEditorProps {
   title: string;
@@ -24,6 +21,8 @@ interface TranscriptEditorProps {
   interimContent: string;
   onContentChange: (newContent: string) => void;
   isRecording: boolean;
+  isPaused?: boolean;
+  createdAt?: Date;
   durationSeconds?: number;
   audioBlob?: Blob | null;
   lineTimings?: TranscriptLineTiming[];
@@ -33,6 +32,31 @@ interface TranscriptEditorProps {
   onClearAiActions?: () => void;
 }
 
+/**
+ * Formats seconds into M:SS (e.g. 0:01, 0:12, 1:05) matching the segment timestamp style.
+ */
+function formatShortTime(seconds: number): string {
+  const safeSec = Math.max(0, Math.floor(seconds || 0));
+  const mins = Math.floor(safeSec / 60);
+  const secs = safeSec % 60;
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Formats Date into "Nov 23, 2026, 01:55 PM" style.
+ */
+function formatSessionDate(date?: Date): string {
+  const d = date ? new Date(date) : new Date();
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+  });
+}
+
 export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   title,
   onTitleChange,
@@ -40,6 +64,8 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   interimContent,
   onContentChange,
   isRecording,
+  isPaused = false,
+  createdAt,
   durationSeconds = 0,
   audioBlob,
   lineTimings = [],
@@ -52,16 +78,21 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
   const [editingSpeakerOld, setEditingSpeakerOld] = useState<string | null>(null);
   const [editingSpeakerNew, setEditingSpeakerNew] = useState('');
 
-  // Audio Playback & Sync States
+  // Audio Playback & Segment Selection States
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const lineElementRefs = useRef<Record<number, HTMLDivElement | null>>({});
+
+  // Player only appears when recording is completely finished (idle), NOT while recording or paused
+  const isFinishedState = !isRecording && !isPaused;
+  const showAudioPlayer = isFinishedState && !!audioUrl;
 
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0;
   const charCount = content.length;
@@ -79,6 +110,7 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
       setIsPlayingAudio(false);
       setCurrentTime(0);
       setAudioDuration(0);
+      setSelectedLineIndex(null);
       return;
     }
 
@@ -93,11 +125,11 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
 
   // Stop audio playback if user starts/resumes live recording
   useEffect(() => {
-    if (isRecording && audioRef.current && !audioRef.current.paused) {
+    if ((isRecording || isPaused) && audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
       setIsPlayingAudio(false);
     }
-  }, [isRecording]);
+  }, [isRecording, isPaused]);
 
   // Effective total duration (handles WebM blobs that report Infinity in HTMLAudioElement)
   const effectiveDuration = useMemo(() => {
@@ -113,12 +145,10 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
 
   /**
    * Maps every dialog line (0..lines.length-1) to an accurate { startTime, endTime } window
-   * so clicking any line jumps to that exact audio position and playing highlights lines in sequence.
    */
   const resolvedTimings = useMemo(() => {
     if (lines.length === 0) return [];
 
-    // 1. If lineTimings matches lines count closely, align directly or by text match
     const totalDur = Math.max(effectiveDuration, lines.length * 2);
     const result: Array<{ startTime: number; endTime: number }> = [];
 
@@ -131,7 +161,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
             .trim()
             .toLowerCase();
 
-          // Look ahead from searchIdx for best matching timing entry
           for (let j = searchIdx; j < Math.min(lineTimings.length, searchIdx + 5); j++) {
             const candidate = lineTimings[j].text.trim().toLowerCase();
             if (
@@ -153,7 +182,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
         }
       );
 
-      // If direct index mapping is 1:1, fill any unmatched slots by index
       if (lineTimings.length === lines.length) {
         for (let i = 0; i < lines.length; i++) {
           if (!matched[i]) {
@@ -168,14 +196,12 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
         }
       }
 
-      // Fill any remaining gaps proportionally
       let lastEnd = 0;
       for (let i = 0; i < lines.length; i++) {
         if (matched[i]) {
           result.push(matched[i]!);
           lastEnd = matched[i]!.endTime;
         } else {
-          // Find next matched anchor
           let nextAnchorTime = totalDur;
           let stepsToAnchor = lines.length - i;
           for (let k = i + 1; k < lines.length; k++) {
@@ -195,7 +221,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
       return result;
     }
 
-    // 2. Fallback: Distribute duration proportionally by character length of each line
     const charLengths = lines.map((l) => Math.max(8, l.length));
     const totalChars = charLengths.reduce((acc, c) => acc + c, 0);
     let cursor = 0;
@@ -211,21 +236,32 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     return result;
   }, [lines, lineTimings, effectiveDuration]);
 
-  // Determine which line index is currently active based on audio playback time
-  const activePlayingLineIndex = useMemo(() => {
-    if (!audioUrl || resolvedTimings.length === 0) return -1;
-    if (!isPlayingAudio && currentTime <= 0.05) return -1;
+  // Active segment index determined either by live audio playback or user click selection
+  const activeLineIndex = useMemo(() => {
+    if (isPlayingAudio && resolvedTimings.length > 0) {
+      for (let i = 0; i < resolvedTimings.length; i++) {
+        const t = resolvedTimings[i];
+        const nextStart =
+          i + 1 < resolvedTimings.length ? resolvedTimings[i + 1].startTime : Infinity;
+        if (currentTime >= t.startTime - 0.15 && currentTime < Math.max(t.endTime, nextStart)) {
+          return i;
+        }
+      }
+      return resolvedTimings.length - 1;
+    }
+    return selectedLineIndex ?? -1;
+  }, [isPlayingAudio, resolvedTimings, currentTime, selectedLineIndex]);
 
-    for (let i = 0; i < resolvedTimings.length; i++) {
-      const t = resolvedTimings[i];
-      const nextStart =
-        i + 1 < resolvedTimings.length ? resolvedTimings[i + 1].startTime : Infinity;
-      if (currentTime >= t.startTime - 0.15 && currentTime < Math.max(t.endTime, nextStart)) {
-        return i;
+  // Sync selectedLineIndex with playback progression so it stays highlighted when paused
+  useEffect(() => {
+    if (isPlayingAudio && activeLineIndex !== -1) {
+      setSelectedLineIndex(activeLineIndex);
+      const el = lineElementRefs.current[activeLineIndex];
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       }
     }
-    return resolvedTimings.length - 1;
-  }, [audioUrl, resolvedTimings, currentTime, isPlayingAudio]);
+  }, [activeLineIndex, isPlayingAudio]);
 
   // Auto-scroll when new text arrives while recording
   useEffect(() => {
@@ -234,41 +270,53 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     }
   }, [content, interimContent, isRecording]);
 
-  // Auto-scroll to follow the active highlighted line during audio playback
-  useEffect(() => {
-    if (isPlayingAudio && activePlayingLineIndex !== -1) {
-      const el = lineElementRefs.current[activePlayingLineIndex];
-      if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      }
-    }
-  }, [activePlayingLineIndex, isPlayingAudio]);
-
   // Audio player controls
   const togglePlayAudio = () => {
     const audio = audioRef.current;
     if (!audio) return;
     if (audio.paused) {
+      // If a segment was selected while paused, make sure we play from its timestamp
+      if (selectedLineIndex !== null && resolvedTimings[selectedLineIndex]) {
+        const seg = resolvedTimings[selectedLineIndex];
+        if (Math.abs(audio.currentTime - seg.startTime) > 0.5 && currentTime === seg.startTime) {
+          audio.currentTime = seg.startTime;
+        }
+      }
       audio.play().catch((err) => console.warn('Audio play error:', err));
     } else {
       audio.pause();
     }
   };
 
-  const handlePlayLine = (index: number) => {
+  const handleSelectAndPlayLine = (index: number) => {
+    if (!isFinishedState) return;
+    setSelectedLineIndex(index);
+
+    const timing = resolvedTimings[index];
+    if (!timing) return;
+
+    const targetStart = Math.max(0, timing.startTime);
+    setCurrentTime(targetStart);
+
     const audio = audioRef.current;
-    if (!audio || !resolvedTimings[index]) return;
-
-    const targetStart = resolvedTimings[index].startTime;
-    // If clicking the already-playing line, toggle pause
-    if (isPlayingAudio && activePlayingLineIndex === index) {
-      audio.pause();
-      return;
+    if (audio) {
+      audio.currentTime = targetStart;
+      audio.play().catch((err) => console.warn('Line audio play error:', err));
     }
+  };
 
-    audio.currentTime = Math.max(0, targetStart);
-    setCurrentTime(Math.max(0, targetStart));
-    audio.play().catch((err) => console.warn('Line audio play error:', err));
+  const handlePrevSegment = () => {
+    if (lines.length === 0) return;
+    const currentIdx = activeLineIndex >= 0 ? activeLineIndex : 0;
+    const prevIdx = Math.max(0, currentIdx - 1);
+    handleSelectAndPlayLine(prevIdx);
+  };
+
+  const handleNextSegment = () => {
+    if (lines.length === 0) return;
+    const currentIdx = activeLineIndex >= 0 ? activeLineIndex : -1;
+    const nextIdx = Math.min(lines.length - 1, currentIdx + 1);
+    handleSelectAndPlayLine(nextIdx);
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -277,13 +325,16 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     if (audioRef.current) {
       audioRef.current.currentTime = val;
     }
-  };
-
-  const handleSkip = (deltaSec: number) => {
-    if (!audioRef.current) return;
-    const next = Math.max(0, Math.min(effectiveDuration, audioRef.current.currentTime + deltaSec));
-    audioRef.current.currentTime = next;
-    setCurrentTime(next);
+    // Also update selectedLineIndex to match seek position
+    for (let i = 0; i < resolvedTimings.length; i++) {
+      const t = resolvedTimings[i];
+      const nextStart =
+        i + 1 < resolvedTimings.length ? resolvedTimings[i + 1].startTime : Infinity;
+      if (val >= t.startTime && val < Math.max(t.endTime, nextStart)) {
+        setSelectedLineIndex(i);
+        break;
+      }
+    }
   };
 
   const cyclePlaybackRate = () => {
@@ -293,24 +344,6 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     if (audioRef.current) {
       audioRef.current.playbackRate = nextRate;
     }
-  };
-
-  const handleDownloadAudio = () => {
-    if (!audioUrl || !audioBlob) return;
-    const ext = audioBlob.type.includes('wav')
-      ? 'wav'
-      : audioBlob.type.includes('mp3')
-        ? 'mp3'
-        : audioBlob.type.includes('mp4') || audioBlob.type.includes('m4a')
-          ? 'm4a'
-          : 'webm';
-    const sanitized = (title || 'rekaman_percakapan')
-      .replace(/[^a-z0-9_-]/gi, '_')
-      .toLowerCase();
-    const a = document.createElement('a');
-    a.href = audioUrl;
-    a.download = `${sanitized}.${ext}`;
-    a.click();
   };
 
   const handleRenameSpeaker = (oldName: string) => {
@@ -327,129 +360,18 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
     setEditingSpeakerNew('');
   };
 
-  // Helper to format line with speaker highlight & interactive audio timestamp
+  // Render each sentence segment matching the clean vertical-bar + timestamp header style
   const renderDialogLine = (line: string, index: number) => {
     const speakerRegex =
-      /^(\*\*\[.*?\]\*\*|\*\[.*?\]\*|\[.*?\]|Pembicara\s+[A-Za-z0-9]+:?|Mas\s+\w+:?|Pak\s+\w+:?|Bu\s+\w+:?):?\s*(.*)$/i;
+      /^(\*\*\[.*?\]\*\*|\*\[.*?\]\*|\[.*?\]|Pembicara\s+[A-Za-z0-9]+:?|Speaker\s+[A-Za-z0-9]+:?|Mas\s+\w+:?|Pak\s+\w+:?|Bu\s+\w+:?):?\s*(.*)$/i;
     const match = line.match(speakerRegex);
     const timing = resolvedTimings[index];
-    const isThisLineActive = activePlayingLineIndex === index;
-    const isThisLinePlaying = isThisLineActive && isPlayingAudio;
-    const canPlayLine = !!audioUrl && !isRecording;
+    const isSelected = isFinishedState && activeLineIndex === index;
+    const canSelectLine = isFinishedState && !!audioUrl;
 
-    const timestampBadge = canPlayLine && timing && (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          handlePlayLine(index);
-        }}
-        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold transition-all cursor-pointer shrink-0 ${
-          isThisLinePlaying
-            ? 'bg-rose-600 text-white shadow-xs animate-pulse'
-            : isThisLineActive
-              ? 'bg-rose-100 dark:bg-rose-900/70 text-rose-700 dark:text-rose-300'
-              : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-rose-100 hover:text-rose-700 dark:hover:bg-rose-950/80 dark:hover:text-rose-300'
-        }`}
-        title={
-          isThisLinePlaying
-            ? 'Jeda pemutaran kalimat ini'
-            : `Putar rekaman suara kalimat ini (${formatDuration(Math.floor(timing.startTime))})`
-        }
-      >
-        {isThisLinePlaying ? (
-          <Pause className="w-2.5 h-2.5 fill-current" />
-        ) : (
-          <Play className="w-2.5 h-2.5 fill-current" />
-        )}
-        <span>{formatDuration(Math.floor(timing.startTime))}</span>
-      </button>
-    );
-
-    if (match) {
-      const speakerName = match[1].replace(/[*\[\]:]/g, '').trim();
-      const speechText = match[2];
-      const isEditingThis = editingSpeakerOld === speakerName;
-
-      return (
-        <div
-          key={index}
-          ref={(el) => {
-            lineElementRefs.current[index] = el;
-          }}
-          onClick={() => {
-            if (canPlayLine && !isEditingThis) handlePlayLine(index);
-          }}
-          className={`border-l-[3px] pl-3.5 pr-2.5 py-1.5 leading-relaxed transition-all rounded-r-xl group ${
-            canPlayLine ? 'cursor-pointer' : ''
-          } ${
-            isThisLineActive
-              ? 'border-rose-500 bg-rose-50/80 dark:bg-rose-950/35 ring-1 ring-rose-500/20 shadow-xs'
-              : 'border-sky-400 hover:bg-sky-50/40 dark:hover:bg-sky-950/20'
-          }`}
-        >
-          <div className="flex items-center justify-between gap-2 mb-1">
-            <div className="flex items-center gap-2">
-              {timestampBadge}
-              {isEditingThis ? (
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-sky-300 dark:border-sky-600 p-1 rounded-lg shadow-xs"
-                >
-                  <input
-                    type="text"
-                    value={editingSpeakerNew}
-                    onChange={(e) => setEditingSpeakerNew(e.target.value)}
-                    placeholder="Nama Pembicara..."
-                    className="text-xs font-semibold px-2 py-0.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded outline-none focus:ring-1 focus:ring-sky-500 w-32"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleRenameSpeaker(speakerName);
-                      if (e.key === 'Escape') setEditingSpeakerOld(null);
-                    }}
-                  />
-                  <button
-                    onClick={() => handleRenameSpeaker(speakerName)}
-                    className="p-1 bg-sky-600 text-white rounded text-[10px] font-bold"
-                    title="Simpan nama"
-                  >
-                    <UserCheck className="w-3 h-3" />
-                  </button>
-                </div>
-              ) : (
-                <span
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setEditingSpeakerOld(speakerName);
-                    setEditingSpeakerNew(speakerName);
-                  }}
-                  className="text-xs font-bold text-sky-700 dark:text-sky-300 bg-sky-100/70 dark:bg-sky-950/70 hover:bg-sky-200/80 dark:hover:bg-sky-900/80 px-2 py-0.5 rounded-md cursor-pointer transition-colors"
-                  title="Klik untuk mengubah nama pembicara ini di seluruh transkrip"
-                >
-                  {speakerName}
-                </span>
-              )}
-            </div>
-
-            {isThisLinePlaying && (
-              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider">
-                <Volume2 className="w-3 h-3 animate-bounce" />
-                <span>Sedang Diputar</span>
-              </span>
-            )}
-          </div>
-          <p
-            className={`text-[15px] ${
-              isThisLineActive
-                ? 'text-slate-900 dark:text-white font-medium'
-                : 'text-slate-800 dark:text-slate-200'
-            }`}
-          >
-            {speechText}
-          </p>
-        </div>
-      );
-    }
+    const speakerName = match ? match[1].replace(/[*\[\]:]/g, '').trim() : null;
+    const speechText = match ? match[2] : line;
+    const isEditingThis = speakerName !== null && editingSpeakerOld === speakerName;
 
     return (
       <div
@@ -458,27 +380,101 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           lineElementRefs.current[index] = el;
         }}
         onClick={() => {
-          if (canPlayLine) handlePlayLine(index);
+          if (canSelectLine && !isEditingThis) {
+            handleSelectAndPlayLine(index);
+          }
         }}
-        className={`border-l-[3px] pl-3.5 pr-2.5 py-1.5 leading-relaxed text-[15px] transition-all rounded-r-xl flex items-start gap-2.5 group ${
-          canPlayLine ? 'cursor-pointer' : ''
-        } ${
-          isThisLineActive
-            ? 'border-rose-500 bg-rose-50/80 dark:bg-rose-950/35 ring-1 ring-rose-500/20 shadow-xs text-slate-900 dark:text-white font-medium'
-            : 'border-sky-400 text-slate-800 dark:text-slate-200 hover:bg-sky-50/40 dark:hover:bg-sky-950/20'
+        className={`py-1.5 transition-all select-text ${
+          canSelectLine ? 'cursor-pointer group' : ''
         }`}
       >
-        {timestampBadge && <div className="mt-0.5">{timestampBadge}</div>}
-        <p className="flex-1">{line}</p>
-        {isThisLinePlaying && (
-          <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider shrink-0 mt-1">
-            <Volume2 className="w-3 h-3 animate-bounce" />
-            <span className="hidden sm:inline">Diputar</span>
-          </span>
+        {/* Timestamp & Optional Speaker Row above the vertical bar */}
+        {(timing || speakerName) && (
+          <div className="flex items-center gap-1.5 text-xs mb-1">
+            {timing && (
+              <span
+                className={`font-mono transition-colors ${
+                  isSelected
+                    ? 'text-sky-600 dark:text-sky-400 font-semibold'
+                    : 'text-slate-400 dark:text-slate-500 group-hover:text-slate-600 dark:group-hover:text-slate-300'
+                }`}
+              >
+                {formatShortTime(timing.startTime)}
+              </span>
+            )}
+
+            {speakerName && (
+              <>
+                {timing && <span className="text-slate-300 dark:text-slate-600">•</span>}
+                {isEditingThis ? (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 bg-white dark:bg-slate-800 border border-sky-300 dark:border-sky-600 p-1 rounded-lg shadow-xs"
+                  >
+                    <input
+                      type="text"
+                      value={editingSpeakerNew}
+                      onChange={(e) => setEditingSpeakerNew(e.target.value)}
+                      placeholder="Nama Pembicara..."
+                      className="text-xs font-semibold px-2 py-0.5 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded outline-none focus:ring-1 focus:ring-sky-500 w-32"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleRenameSpeaker(speakerName);
+                        if (e.key === 'Escape') setEditingSpeakerOld(null);
+                      }}
+                    />
+                    <button
+                      onClick={() => handleRenameSpeaker(speakerName)}
+                      className="p-1 bg-sky-600 text-white rounded text-[10px] font-bold"
+                      title="Simpan nama"
+                    >
+                      <UserCheck className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingSpeakerOld(speakerName);
+                      setEditingSpeakerNew(speakerName);
+                    }}
+                    className="text-xs font-semibold text-sky-500 hover:text-sky-600 dark:text-sky-400 cursor-pointer transition-colors"
+                    title="Klik untuk mengubah nama pembicara"
+                  >
+                    {speakerName}
+                  </span>
+                )}
+              </>
+            )}
+          </div>
         )}
+
+        {/* Vertical Blue Bar + Sentence Text (turns blue when selected/playing) */}
+        <div
+          className={`border-l-[3px] pl-3.5 py-0.5 transition-colors ${
+            isSelected
+              ? 'border-sky-500'
+              : 'border-sky-400 group-hover:border-sky-500'
+          }`}
+        >
+          <p
+            className={`text-[15px] leading-relaxed transition-colors ${
+              isSelected
+                ? 'text-sky-500 dark:text-sky-400 font-semibold'
+                : 'text-slate-800 dark:text-slate-200 group-hover:text-sky-600/80 dark:group-hover:text-sky-300/80'
+            }`}
+          >
+            {speechText}
+          </p>
+        </div>
       </div>
     );
   };
+
+  const progressPercent = Math.min(
+    100,
+    Math.max(0, (currentTime / Math.max(effectiveDuration, 0.1)) * 100)
+  );
 
   return (
     <div className="flex-1 flex flex-col bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs overflow-hidden transition-colors">
@@ -566,94 +562,11 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
         </div>
       </div>
 
-      {/* Synced Audio Playback Bar (Visible when paused or stopped & audio exists) */}
-      {audioUrl && !isRecording && (
-        <div className="px-4 sm:px-6 py-2.5 bg-gradient-to-r from-rose-50/80 via-indigo-50/50 to-slate-50 dark:from-rose-950/30 dark:via-indigo-950/25 dark:to-slate-900 border-b border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center gap-3">
-          {/* Play / Pause Button */}
-          <button
-            type="button"
-            onClick={togglePlayAudio}
-            className="inline-flex items-center justify-center w-8 h-8 rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-xs transition-all active:scale-95 shrink-0 cursor-pointer"
-            title={isPlayingAudio ? 'Jeda Pemutaran Audio' : 'Putar & Runtut Rekaman Audio'}
-          >
-            {isPlayingAudio ? (
-              <Pause className="w-4 h-4 fill-current" />
-            ) : (
-              <Play className="w-4 h-4 fill-current ml-0.5" />
-            )}
-          </button>
-
-          {/* Skip -5s / +5s */}
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              onClick={() => handleSkip(-5)}
-              className="p-1.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-              title="Mundur 5 detik"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSkip(5)}
-              className="p-1.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-              title="Maju 5 detik"
-            >
-              <RotateCw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {/* Current Time */}
-          <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 tabular-nums">
-            {formatDuration(Math.floor(currentTime))}
-          </span>
-
-          {/* Timeline Seek Bar */}
-          <div className="flex-1 min-w-[120px] flex items-center">
-            <input
-              type="range"
-              min={0}
-              max={effectiveDuration}
-              step={0.1}
-              value={Math.min(currentTime, effectiveDuration)}
-              onChange={handleSeek}
-              className="w-full h-1.5 bg-slate-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-rose-600"
-            />
-          </div>
-
-          {/* Total Duration */}
-          <span className="text-xs font-mono text-slate-500 dark:text-slate-400 tabular-nums">
-            {formatDuration(Math.floor(effectiveDuration))}
-          </span>
-
-          {/* Speed Control */}
-          <button
-            type="button"
-            onClick={cyclePlaybackRate}
-            className="px-2 py-1 text-[11px] font-mono font-bold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-            title="Kecepatan putar audio"
-          >
-            {playbackRate}x
-          </button>
-
-          {/* Download Recorded Audio */}
-          <button
-            type="button"
-            onClick={handleDownloadAudio}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors cursor-pointer"
-            title="Unduh file rekaman suara percakapan ini"
-          >
-            <Download className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
-            <span className="hidden sm:inline">Unduh Audio</span>
-          </button>
-        </div>
-      )}
-
       {/* Editor Body */}
       <div ref={containerRef} className="flex-1 p-6 flex flex-col overflow-y-auto space-y-4">
         {/* Main Content Area */}
         {viewMode === 'dialog' ? (
-          <div className="flex-1 min-h-[220px] space-y-2.5">
+          <div className="flex-1 min-h-[220px] space-y-3">
             {lines.length === 0 && !interimContent ? (
               <div
                 onClick={() => setViewMode('raw')}
@@ -665,15 +578,19 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
               </div>
             ) : (
               <>
-                {audioUrl && !isRecording && lines.length > 0 && (
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500 pb-1">
-                    <Volume2 className="w-3.5 h-3.5 text-rose-500" />
-                    <span>
-                      Klik pada baris kalimat atau tombol waktu <strong>▶ 00:00</strong> untuk memutar dan meruntut rekaman suara pada kalimat tersebut.
-                    </span>
+                {/* Top Session Metadata Header (Date • Duration • Segments) */}
+                {lines.length > 0 && (
+                  <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400 pb-2">
+                    <span>{formatSessionDate(createdAt)}</span>
+                    <span>•</span>
+                    <span>{formatShortTime(effectiveDuration)}</span>
+                    <span>•</span>
+                    <span>{lines.length} segments</span>
                   </div>
                 )}
+
                 {lines.map((line, idx) => renderDialogLine(line, idx))}
+
                 {interimContent && (
                   <div className="border-l-[3px] border-amber-400 bg-amber-50/50 dark:bg-amber-950/30 pl-3.5 py-1.5 rounded-r-lg text-slate-700 dark:text-slate-300 animate-pulse transition-all">
                     <div className="flex items-center gap-1.5 mb-1">
@@ -752,6 +669,81 @@ export const TranscriptEditor: React.FC<TranscriptEditorProps> = ({
           </div>
         )}
       </div>
+
+      {/* Bottom Audio Player Dock (Appears ONLY when recording is finished / idle) */}
+      {showAudioPlayer && (
+        <div className="bg-white dark:bg-slate-900 select-none">
+          {/* Top Full-Width Blue Progress Line (Clickable / Draggable Scrubber) */}
+          <div className="relative w-full h-1 bg-slate-200 dark:bg-slate-800 group cursor-pointer">
+            <div
+              className="absolute top-0 left-0 bottom-0 bg-sky-500 transition-all duration-75"
+              style={{ width: `${progressPercent}%` }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={effectiveDuration}
+              step={0.1}
+              value={Math.min(currentTime, effectiveDuration)}
+              onChange={handleSeek}
+              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              title="Geser waktu pemutaran audio"
+            />
+          </div>
+
+          {/* Centered Player Controls */}
+          <div className="py-3.5 px-6 flex items-center justify-center gap-4 sm:gap-5">
+            {/* Time Display: 0:12 / 0:15 */}
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-400 tabular-nums mr-1">
+              {formatShortTime(currentTime)} / {formatShortTime(effectiveDuration)}
+            </span>
+
+            {/* Previous Segment Button (|<) */}
+            <button
+              type="button"
+              onClick={handlePrevSegment}
+              className="w-10 h-10 rounded-full bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 dark:hover:bg-sky-900/80 text-sky-600 dark:text-sky-400 flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+              title="Kalimat sebelumnya"
+            >
+              <SkipBack className="w-4 h-4" />
+            </button>
+
+            {/* Large Blue Play / Pause Button */}
+            <button
+              type="button"
+              onClick={togglePlayAudio}
+              className="w-14 h-14 rounded-full bg-sky-500 hover:bg-sky-600 text-white shadow-md shadow-sky-200 dark:shadow-none flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+              title={isPlayingAudio ? 'Jeda Audio' : 'Putar Audio'}
+            >
+              {isPlayingAudio ? (
+                <Pause className="w-6 h-6" />
+              ) : (
+                <Play className="w-6 h-6 ml-0.5" />
+              )}
+            </button>
+
+            {/* Next Segment Button (>|) */}
+            <button
+              type="button"
+              onClick={handleNextSegment}
+              className="w-10 h-10 rounded-full bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 dark:hover:bg-sky-900/80 text-sky-600 dark:text-sky-400 flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+              title="Kalimat berikutnya"
+            >
+              <SkipForward className="w-4 h-4" />
+            </button>
+
+            {/* Playback Speed Pill (1x) */}
+            <button
+              type="button"
+              onClick={cyclePlaybackRate}
+              className="w-10 h-10 rounded-full bg-sky-50 hover:bg-sky-100 dark:bg-sky-950/60 dark:hover:bg-sky-900/80 text-sky-600 dark:text-sky-400 text-xs font-semibold flex items-center justify-center transition-all active:scale-95 cursor-pointer"
+              title="Kecepatan putar audio"
+            >
+              {playbackRate}x
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

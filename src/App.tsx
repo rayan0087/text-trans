@@ -610,17 +610,10 @@ export function App() {
 
   const handlePause = async () => {
     speechServiceRef.current?.pause();
-    let masterSnapshot: Blob | null = null;
     if (engine === 'whisper' && audioRecorderRef.current) {
-      masterSnapshot = await audioRecorderRef.current.pause();
-      if (masterSnapshot) {
-        audioBlobRef.current = masterSnapshot;
-        setAudioBlob(masterSnapshot);
-      }
+      await audioRecorderRef.current.pause();
     }
-    await persistTranscript({
-      audioBlob: masterSnapshot || audioBlobRef.current || undefined,
-    });
+    await persistTranscript();
   };
 
   const handleResume = () => {
@@ -963,6 +956,8 @@ export function App() {
           interimContent={interimContent}
           onContentChange={setContent}
           isRecording={speechState === 'recording'}
+          isPaused={speechState === 'paused'}
+          createdAt={currentRecord.createdAt}
           durationSeconds={durationSeconds}
           audioBlob={audioBlob}
           lineTimings={lineTimings}
