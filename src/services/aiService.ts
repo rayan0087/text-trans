@@ -6,9 +6,16 @@ export interface AISettings {
   customModel?: string;
 }
 
+export interface WhisperSegmentTiming {
+  text: string;
+  startTime: number;
+  endTime: number;
+}
+
 export interface AIResponse {
   success: boolean;
   result?: string;
+  segments?: WhisperSegmentTiming[];
   error?: string;
 }
 
@@ -377,7 +384,7 @@ export async function transcribeAudio(
       formData.append('file', audioBlob, fileName);
       formData.append('model', 'whisper-large-v3-turbo');
       formData.append('language', langCode);
-      formData.append('response_format', 'json');
+      formData.append('response_format', 'verbose_json');
       formData.append('temperature', '0');
       formData.append('prompt', finalPrompt);
 
@@ -395,12 +402,43 @@ export async function transcribeAudio(
       }
 
       const data = await response.json();
-      return { success: true, result: formatIntoSentenceLines(data.text?.trim() || '') };
+      const parsedSegments: WhisperSegmentTiming[] = [];
+      if (Array.isArray(data.segments)) {
+        for (const seg of data.segments) {
+          const cleanSegText = formatIntoSentenceLines(seg.text || '');
+          if (!cleanSegText) continue;
+          const lines = cleanSegText.split('\n').filter(Boolean);
+          const segStart = typeof seg.start === 'number' ? seg.start : 0;
+          const segEnd = typeof seg.end === 'number' ? seg.end : segStart + 2;
+          const dur = Math.max(0.4, segEnd - segStart);
+          lines.forEach((line, idx) => {
+            const subStart = segStart + (dur * idx) / lines.length;
+            const subEnd = segStart + (dur * (idx + 1)) / lines.length;
+            parsedSegments.push({
+              text: line,
+              startTime: Number(subStart.toFixed(1)),
+              endTime: Number(subEnd.toFixed(1)),
+            });
+          });
+        }
+      }
+
+      const finalResult =
+        parsedSegments.length > 0
+          ? parsedSegments.map((s) => s.text).join('\n')
+          : formatIntoSentenceLines(data.text?.trim() || '');
+
+      return {
+        success: true,
+        result: finalResult,
+        segments: parsedSegments.length > 0 ? parsedSegments : undefined,
+      };
     } else if (provider === 'openai') {
       const formData = new FormData();
       formData.append('file', audioBlob, fileName);
       formData.append('model', 'whisper-1');
       formData.append('language', langCode);
+      formData.append('response_format', 'verbose_json');
       formData.append('temperature', '0');
       formData.append('prompt', finalPrompt);
 
@@ -418,7 +456,37 @@ export async function transcribeAudio(
       }
 
       const data = await response.json();
-      return { success: true, result: formatIntoSentenceLines(data.text?.trim() || '') };
+      const parsedSegments: WhisperSegmentTiming[] = [];
+      if (Array.isArray(data.segments)) {
+        for (const seg of data.segments) {
+          const cleanSegText = formatIntoSentenceLines(seg.text || '');
+          if (!cleanSegText) continue;
+          const lines = cleanSegText.split('\n').filter(Boolean);
+          const segStart = typeof seg.start === 'number' ? seg.start : 0;
+          const segEnd = typeof seg.end === 'number' ? seg.end : segStart + 2;
+          const dur = Math.max(0.4, segEnd - segStart);
+          lines.forEach((line, idx) => {
+            const subStart = segStart + (dur * idx) / lines.length;
+            const subEnd = segStart + (dur * (idx + 1)) / lines.length;
+            parsedSegments.push({
+              text: line,
+              startTime: Number(subStart.toFixed(1)),
+              endTime: Number(subEnd.toFixed(1)),
+            });
+          });
+        }
+      }
+
+      const finalResult =
+        parsedSegments.length > 0
+          ? parsedSegments.map((s) => s.text).join('\n')
+          : formatIntoSentenceLines(data.text?.trim() || '');
+
+      return {
+        success: true,
+        result: finalResult,
+        segments: parsedSegments.length > 0 ? parsedSegments : undefined,
+      };
     } else if (provider === 'gemini') {
       const base64Audio = await blobToBase64(audioBlob);
       const mime = audioBlob.type || 'audio/webm';

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, getSetting, type TranscriptRecord } from './db';
+import { db, getSetting, type TranscriptRecord, type TranscriptLineTiming } from './db';
 import { SpeechService, type SpeechState } from './services/speechRecognition';
 import { AudioRecorderService } from './services/audioRecorder';
 import { splitAudioFileForWhisper } from './services/audioChunker';
@@ -54,7 +54,6 @@ function computeWordOverlap(a: string, b: string): number {
 
   if (normA.length === 0 || normB.length === 0) return 0;
 
-  // Check prefix word match (common when Chrome revises the end of an interim sentence)
   const minLen = Math.min(normA.length, normB.length);
   let prefixMatches = 0;
   for (let i = 0; i < minLen; i++) {
@@ -90,6 +89,8 @@ export function App() {
   const [language, setLanguage] = useState('id-ID');
   const [aiSummary, setAiSummary] = useState<string | undefined>(undefined);
   const [aiActionItems, setAiActionItems] = useState<string | undefined>(undefined);
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [lineTimings, setLineTimings] = useState<TranscriptLineTiming[]>([]);
 
   // Recording Engine & States
   const [engine, setEngine] = useState<TranscriptionEngine>('whisper');
@@ -104,9 +105,16 @@ export function App() {
   const speechServiceRef = useRef<SpeechService | null>(null);
   const audioRecorderRef = useRef<AudioRecorderService | null>(null);
 
-  // Hybrid Live + Whisper coordination refs
+  // Hybrid Live + Whisper & Audio Timing coordination refs
   const currentChunkProvisionalLinesRef = useRef<string[]>([]);
   const whisperQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const audioBlobRef = useRef<Blob | null>(null);
+  audioBlobRef.current = audioBlob;
+  const lineTimingsRef = useRef<TranscriptLineTiming[]>([]);
+  lineTimingsRef.current = lineTimings;
+  const currentUtteranceStartSecRef = useRef<number | null>(null);
+  const durationSecondsRef = useRef(durationSeconds);
+  durationSecondsRef.current = durationSeconds;
 
   // Modals & UI Layout
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -152,6 +160,8 @@ export function App() {
         language,
         aiSummary,
         aiActionItems,
+        audioBlob: audioBlobRef.current || undefined,
+        lineTimings: lineTimingsRef.current,
         updatedAt: new Date(),
         ...overrideData,
       };
@@ -162,7 +172,8 @@ export function App() {
         if (
           recordData.content?.trim() ||
           recordData.title !== 'Transkrip Baru' ||
-          recordData.durationSeconds! > 0
+          recordData.durationSeconds! > 0 ||
+          recordData.audioBlob
         ) {
           const newId = await db.transcripts.add({
             title: recordData.title || 'Transkrip Baru',
@@ -173,6 +184,8 @@ export function App() {
             language: recordData.language || 'id-ID',
             aiSummary: recordData.aiSummary,
             aiActionItems: recordData.aiActionItems,
+            audioBlob: recordData.audioBlob,
+            lineTimings: recordData.lineTimings,
           });
           setActiveId(newId);
         }
@@ -182,14 +195,24 @@ export function App() {
   );
 
   /**
-   * Commits an utterance into the transcript with multi-stage deduplication:
-   * - Supports explicit `replaceLastLine` when Web Speech API updates a previously flushed resultIndex
-   * - Detects cumulative extensions and high word-overlap revisions
+   * Commits an utterance into the transcript with multi-stage deduplication & timestamp tracking.
    */
   const commitUtterance = useCallback((text: string, replaceLastLine: boolean = false) => {
     const cleaned = cleanSpeechTerms(text);
     const trimmed = cleaned.trim();
     if (!trimmed) return;
+
+    const nowElapsed =
+      audioRecorderRef.current?.getElapsedSeconds() || durationSecondsRef.current;
+    const uttStartSec =
+      currentUtteranceStartSecRef.current !== null
+        ? currentUtteranceStartSecRef.current
+        : Math.max(0, Number((nowElapsed - 1.8).toFixed(1)));
+    const uttEndSec = Math.max(uttStartSec + 0.6, Number(nowElapsed.toFixed(1)));
+
+    if (!replaceLastLine) {
+      currentUtteranceStartSecRef.current = null;
+    }
 
     // Track provisional lines spoken during the current audio chunk so Whisper can upgrade them accurately
     const provList = currentChunkProvisionalLinesRef.current;
@@ -212,8 +235,33 @@ export function App() {
       provList.push(trimmed);
     }
 
+    const updateLastTiming = (newText: string) => {
+      const nextTimings = [...lineTimingsRef.current];
+      if (nextTimings.length > 0) {
+        nextTimings[nextTimings.length - 1] = {
+          ...nextTimings[nextTimings.length - 1],
+          text: newText,
+          endTime: uttEndSec,
+        };
+      } else {
+        nextTimings.push({ text: newText, startTime: uttStartSec, endTime: uttEndSec });
+      }
+      lineTimingsRef.current = nextTimings;
+      setLineTimings(nextTimings);
+    };
+
+    const appendNewTiming = (newText: string) => {
+      const nextTimings = [
+        ...lineTimingsRef.current,
+        { text: newText, startTime: uttStartSec, endTime: uttEndSec },
+      ];
+      lineTimingsRef.current = nextTimings;
+      setLineTimings(nextTimings);
+    };
+
     setContent((prev) => {
       if (!prev) {
+        appendNewTiming(trimmed);
         contentRef.current = trimmed;
         return trimmed;
       }
@@ -232,6 +280,7 @@ export function App() {
         // Case 0: Explicit replacement of the same Web Speech resultIndex
         if (replaceLastLine) {
           lines[lastNonEmptyIndex] = trimmed;
+          updateLastTiming(trimmed);
           const updated = lines.join('\n');
           contentRef.current = updated;
           return updated;
@@ -248,6 +297,7 @@ export function App() {
           (normLast.length > 3 && normTrimmed.startsWith(normLast))
         ) {
           lines[lastNonEmptyIndex] = trimmed;
+          updateLastTiming(trimmed);
           const updated = lines.join('\n');
           contentRef.current = updated;
           return updated;
@@ -265,6 +315,7 @@ export function App() {
         ) {
           if (trimmed.length >= lastLine.length - 3) {
             lines[lastNonEmptyIndex] = trimmed;
+            updateLastTiming(trimmed);
             const updated = lines.join('\n');
             contentRef.current = updated;
             return updated;
@@ -274,6 +325,7 @@ export function App() {
       }
 
       // Case 5: Brand new utterance -> append on new line
+      appendNewTiming(trimmed);
       const separator = prev && !prev.endsWith('\n') ? '\n' : '';
       const updated = prev + separator + trimmed;
       contentRef.current = updated;
@@ -283,22 +335,19 @@ export function App() {
 
   /**
    * Processes a live audio chunk with Whisper AI in the background and upgrades
-   * the provisional browser lines (or appends new speech that the browser missed).
+   * the provisional browser lines + their exact timestamps.
    */
   const handleLiveAudioChunk = useCallback(
-    (audioBlob: Blob) => {
-      // Snapshot the provisional lines that Web Speech API produced during this audio window
+    (chunkBlob: Blob, chunkStartSec: number, chunkEndSec: number) => {
       const provisionalSnapshot = [...currentChunkProvisionalLinesRef.current];
       currentChunkProvisionalLinesRef.current = [];
 
-      // Enqueue sequential Whisper transcription so chunks never race out of order
       whisperQueueRef.current = whisperQueueRef.current.then(async () => {
         const settings = await getSetting<AISettings>('ai_settings', {
           provider: 'groq',
           apiKey: '',
         });
 
-        // If no API key is configured, rely cleanly on the provisional live speech transcript
         if (!settings.apiKey || !settings.apiKey.trim()) {
           return;
         }
@@ -306,7 +355,7 @@ export function App() {
         setActiveWhisperChunks((c) => c + 1);
         try {
           const currentText = contentRef.current || '';
-          const res = await transcribeAudio(settings, audioBlob, language, currentText.slice(-260));
+          const res = await transcribeAudio(settings, chunkBlob, language, currentText.slice(-260));
           if (!res.success || !res.result || !res.result.trim()) {
             return;
           }
@@ -314,34 +363,46 @@ export function App() {
           const whisperCleaned = cleanSpeechTerms(res.result.trim());
           if (!whisperCleaned) return;
 
+          const whisperLines = whisperCleaned
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean);
+
+          const chunkSpan = Math.max(0.8, chunkEndSec - chunkStartSec);
+          const newChunkTimings: TranscriptLineTiming[] = whisperLines.map((wLine, idx) => {
+            const seg = res.segments?.[idx];
+            const sTime = seg
+              ? Number((chunkStartSec + seg.startTime).toFixed(1))
+              : Number((chunkStartSec + (chunkSpan * idx) / whisperLines.length).toFixed(1));
+            const eTime = seg
+              ? Number((chunkStartSec + seg.endTime).toFixed(1))
+              : Number((chunkStartSec + (chunkSpan * (idx + 1)) / whisperLines.length).toFixed(1));
+            return {
+              text: wLine,
+              startTime: sTime,
+              endTime: Math.max(sTime + 0.5, eTime),
+            };
+          });
+
           setContent((prev) => {
             if (!prev) {
+              lineTimingsRef.current = newChunkTimings;
+              setLineTimings(newChunkTimings);
               contentRef.current = whisperCleaned;
               return whisperCleaned;
             }
 
-            // 1. If we have a snapshot of provisional browser lines from this chunk window, replace them in-place
-            if (provisionalSnapshot.length > 0) {
-              const provisionalBlock = provisionalSnapshot.join('\n');
-              const blockIdx = prev.lastIndexOf(provisionalBlock);
-              if (blockIdx !== -1) {
-                const updated =
-                  prev.slice(0, blockIdx) +
-                  whisperCleaned +
-                  prev.slice(blockIdx + provisionalBlock.length);
-                contentRef.current = updated;
-                return updated;
-              }
+            const lines = prev.split('\n').filter((l) => l.trim().length > 0);
 
-              // Fallback: match the first provisional line up to the last provisional line
-              const lines = prev.split('\n');
+            // 1. Match provisional browser lines from this chunk window and replace them + their timings in-place
+            if (provisionalSnapshot.length > 0) {
               const firstProv = provisionalSnapshot[0].trim().toLowerCase();
               let matchStart = -1;
               for (let i = lines.length - 1; i >= Math.max(0, lines.length - 8); i--) {
                 const normLine = lines[i].trim().toLowerCase();
                 if (
                   normLine === firstProv ||
-                  computeWordOverlap(normLine, firstProv) >= 0.5
+                  computeWordOverlap(normLine, firstProv) >= 0.45
                 ) {
                   matchStart = i;
                   break;
@@ -353,20 +414,37 @@ export function App() {
                   provisionalSnapshot.length,
                   lines.length - matchStart
                 );
-                lines.splice(matchStart, removeCount, whisperCleaned);
+                lines.splice(matchStart, removeCount, ...whisperLines);
+
+                const nextTimings = [...lineTimingsRef.current];
+                if (matchStart <= nextTimings.length) {
+                  nextTimings.splice(matchStart, removeCount, ...newChunkTimings);
+                } else {
+                  nextTimings.push(...newChunkTimings);
+                }
+                lineTimingsRef.current = nextTimings;
+                setLineTimings(nextTimings);
+
                 const updated = lines.join('\n');
                 contentRef.current = updated;
                 return updated;
               }
             }
 
-            // 2. If provisionalSnapshot was empty (e.g. Web Speech flushed slightly after VAD cut, or missed soft speech)
-            const lines = prev.split('\n').filter((l) => l.trim().length > 0);
+            // 2. Fallback: Check if the last line of content matches the Whisper output
             if (lines.length > 0) {
               const lastLine = lines[lines.length - 1];
-              const overlap = computeWordOverlap(lastLine, whisperCleaned);
-              if (overlap >= 0.4) {
-                lines[lines.length - 1] = whisperCleaned;
+              if (computeWordOverlap(lastLine, whisperCleaned) >= 0.4) {
+                lines.splice(lines.length - 1, 1, ...whisperLines);
+                const nextTimings = [...lineTimingsRef.current];
+                if (nextTimings.length > 0) {
+                  nextTimings.splice(nextTimings.length - 1, 1, ...newChunkTimings);
+                } else {
+                  nextTimings.push(...newChunkTimings);
+                }
+                lineTimingsRef.current = nextTimings;
+                setLineTimings(nextTimings);
+
                 const updated = lines.join('\n');
                 contentRef.current = updated;
                 return updated;
@@ -374,6 +452,10 @@ export function App() {
             }
 
             // 3. Brand new speech caught by Whisper that Web Speech API missed completely
+            const nextTimings = [...lineTimingsRef.current, ...newChunkTimings];
+            lineTimingsRef.current = nextTimings;
+            setLineTimings(nextTimings);
+
             const separator = prev && !prev.endsWith('\n') ? '\n' : '';
             const updated = prev + separator + whisperCleaned;
             contentRef.current = updated;
@@ -420,6 +502,14 @@ export function App() {
           }
         },
         onInterimTranscript: (text) => {
+          if (currentUtteranceStartSecRef.current === null && text.trim()) {
+            const nowElapsed =
+              audioRecorderRef.current?.getElapsedSeconds() || durationSecondsRef.current;
+            currentUtteranceStartSecRef.current = Math.max(
+              0,
+              Number((nowElapsed - 0.3).toFixed(1))
+            );
+          }
           const cleaned = cleanSpeechTerms(text);
           setInterimContent(cleaned);
           interimSpeechRef.current = cleaned;
@@ -500,12 +590,15 @@ export function App() {
   // Controls Handlers
   const handleStart = async () => {
     currentChunkProvisionalLinesRef.current = [];
+    currentUtteranceStartSecRef.current = null;
+    setAudioBlob(null);
+    audioBlobRef.current = null;
 
     // 1. Ensure live recognition always starts immediately so user can talk without lag
     speechServiceRef.current?.setLanguage(language);
     speechServiceRef.current?.start();
 
-    // 2. Start hardware audio recorder + VAD in parallel for Whisper AI verification
+    // 2. Start hardware audio recorder + VAD in parallel for Whisper AI verification & master recording
     if (engine === 'whisper') {
       try {
         await audioRecorderRef.current?.start();
@@ -515,12 +608,19 @@ export function App() {
     }
   };
 
-  const handlePause = () => {
+  const handlePause = async () => {
     speechServiceRef.current?.pause();
-    if (engine === 'whisper') {
-      audioRecorderRef.current?.pause();
+    let masterSnapshot: Blob | null = null;
+    if (engine === 'whisper' && audioRecorderRef.current) {
+      masterSnapshot = await audioRecorderRef.current.pause();
+      if (masterSnapshot) {
+        audioBlobRef.current = masterSnapshot;
+        setAudioBlob(masterSnapshot);
+      }
     }
-    persistTranscript();
+    await persistTranscript({
+      audioBlob: masterSnapshot || audioBlobRef.current || undefined,
+    });
   };
 
   const handleResume = () => {
@@ -542,10 +642,16 @@ export function App() {
 
     if (engine === 'whisper' && audioRecorderRef.current) {
       try {
-        await audioRecorderRef.current.stop();
+        const finalMasterBlob = await audioRecorderRef.current.stop();
+        if (finalMasterBlob) {
+          audioBlobRef.current = finalMasterBlob;
+          setAudioBlob(finalMasterBlob);
+        }
         // Wait for any in-flight Whisper chunk to finish before final persist
         await whisperQueueRef.current;
-        persistTranscript();
+        await persistTranscript({
+          audioBlob: finalMasterBlob || audioBlobRef.current || undefined,
+        });
       } catch (err: any) {
         console.error('Audio recorder stop error:', err);
         persistTranscript();
@@ -562,10 +668,9 @@ export function App() {
 
   /**
    * Upload Audio File Transcription Handler with Automatic 16kHz Mono Chunking
-   * Supports long 1-3+ hour meeting files and files > 25MB seamlessly.
+   * Also stores the uploaded audio file and sentence timestamps for interactive synced playback.
    */
   const handleUploadAudio = async (file: File) => {
-    // 1. Check API Key
     const settings = await getSetting<AISettings>('ai_settings', {
       provider: 'groq',
       apiKey: '',
@@ -578,7 +683,6 @@ export function App() {
       return;
     }
 
-    // 2. Process transcription (auto-chunking if > 5.5 minutes or > 20 MB)
     try {
       setIsUploadingAudio(true);
       setUploadStatusMessage(
@@ -597,7 +701,14 @@ export function App() {
         setDurationSeconds(decodedDuration);
       }
 
+      // Attach uploaded audio file for synced playback immediately
+      audioBlobRef.current = file;
+      setAudioBlob(file);
+      lineTimingsRef.current = [];
+      setLineTimings([]);
+
       let accumulatedTranscript = '';
+      const accumulatedTimings: TranscriptLineTiming[] = [];
 
       for (let i = 0; i < segments.length; i++) {
         const seg = segments[i];
@@ -623,11 +734,34 @@ export function App() {
 
         const cleanedChunk = cleanSpeechTerms((res.result || '').trim());
         if (cleanedChunk) {
+          const chunkLines = cleanedChunk
+            .split('\n')
+            .map((l) => l.trim())
+            .filter(Boolean);
+          const segSpan = Math.max(1, (seg.endSec || decodedDuration || 60) - seg.startSec);
+
+          chunkLines.forEach((lineText, idx) => {
+            const whisperSeg = res.segments?.[idx];
+            const sTime = whisperSeg
+              ? Number((seg.startSec + whisperSeg.startTime).toFixed(1))
+              : Number((seg.startSec + (segSpan * idx) / chunkLines.length).toFixed(1));
+            const eTime = whisperSeg
+              ? Number((seg.startSec + whisperSeg.endTime).toFixed(1))
+              : Number((seg.startSec + (segSpan * (idx + 1)) / chunkLines.length).toFixed(1));
+
+            accumulatedTimings.push({
+              text: lineText,
+              startTime: sTime,
+              endTime: Math.max(sTime + 0.5, eTime),
+            });
+          });
+
           accumulatedTranscript = accumulatedTranscript
             ? `${accumulatedTranscript}\n${cleanedChunk}`
             : cleanedChunk;
 
-          // Stream each completed segment live to the editor so the user can start reading immediately
+          lineTimingsRef.current = [...accumulatedTimings];
+          setLineTimings([...accumulatedTimings]);
           setContent(accumulatedTranscript);
           contentRef.current = accumulatedTranscript;
         }
@@ -639,6 +773,8 @@ export function App() {
           title: newTitle,
           content: accumulatedTranscript.trim(),
           durationSeconds: decodedDuration || durationSeconds,
+          audioBlob: file,
+          lineTimings: accumulatedTimings,
         });
       } else {
         alert('Tidak ada suara percakapan yang terdeteksi di dalam file audio tersebut.');
@@ -683,6 +819,7 @@ export function App() {
     }
 
     currentChunkProvisionalLinesRef.current = [];
+    currentUtteranceStartSecRef.current = null;
     setActiveId(null);
     setTitle('Transkrip Baru');
     setContent('');
@@ -690,6 +827,10 @@ export function App() {
     setDurationSeconds(0);
     setAiSummary(undefined);
     setAiActionItems(undefined);
+    setAudioBlob(null);
+    audioBlobRef.current = null;
+    setLineTimings([]);
+    lineTimingsRef.current = [];
   };
 
   const handleSelectTranscript = (id: number) => {
@@ -700,6 +841,7 @@ export function App() {
       }
     }
     currentChunkProvisionalLinesRef.current = [];
+    currentUtteranceStartSecRef.current = null;
     const target = transcripts.find((t) => t.id === id);
     if (target) {
       setActiveId(target.id!);
@@ -710,6 +852,10 @@ export function App() {
       setLanguage(target.language || 'id-ID');
       setAiSummary(target.aiSummary);
       setAiActionItems(target.aiActionItems);
+      setAudioBlob(target.audioBlob || null);
+      audioBlobRef.current = target.audioBlob || null;
+      setLineTimings(target.lineTimings || []);
+      lineTimingsRef.current = target.lineTimings || [];
     }
   };
 
@@ -728,6 +874,8 @@ export function App() {
     language,
     aiSummary,
     aiActionItems,
+    audioBlob: audioBlob || undefined,
+    lineTimings,
     createdAt: activeId
       ? transcripts.find((t) => t.id === activeId)?.createdAt || new Date()
       : new Date(),
@@ -807,7 +955,7 @@ export function App() {
           audioLevel={audioLevel}
         />
 
-        {/* 2. Main Live Transcript Editor with Sentence Dialog View */}
+        {/* 2. Main Live Transcript Editor with Sentence Dialog View & Synced Audio Player */}
         <TranscriptEditor
           title={title}
           onTitleChange={setTitle}
@@ -815,6 +963,9 @@ export function App() {
           interimContent={interimContent}
           onContentChange={setContent}
           isRecording={speechState === 'recording'}
+          durationSeconds={durationSeconds}
+          audioBlob={audioBlob}
+          lineTimings={lineTimings}
           aiSummary={aiSummary}
           aiActionItems={aiActionItems}
           onClearAiSummary={() => setAiSummary(undefined)}

@@ -1,5 +1,11 @@
 import Dexie, { type Table } from 'dexie';
 
+export interface TranscriptLineTiming {
+  text: string;
+  startTime: number; // in seconds
+  endTime: number;   // in seconds
+}
+
 export interface TranscriptRecord {
   id?: number;
   title: string;
@@ -11,6 +17,8 @@ export interface TranscriptRecord {
   aiSummary?: string;
   aiActionItems?: string;
   aiPolished?: string;
+  audioBlob?: Blob;
+  lineTimings?: TranscriptLineTiming[];
 }
 
 export interface AppSetting {
@@ -26,7 +34,7 @@ export class AutoTranscriptDB extends Dexie {
     super('AutoTranscriptDB');
     this.version(1).stores({
       transcripts: '++id, title, createdAt, updatedAt, language',
-      settings: 'key'
+      settings: 'key',
     });
   }
 }
