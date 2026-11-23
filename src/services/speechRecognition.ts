@@ -7,7 +7,7 @@ interface IWindow extends Window {
 export type SpeechState = 'idle' | 'recording' | 'paused';
 
 export interface SpeechCallbacks {
-  onFinalTranscript: (text: string) => void;
+  onFinalTranscript: (text: string, replaceLastLine?: boolean) => void;
   onInterimTranscript: (text: string) => void;
   onStateChange: (state: SpeechState) => void;
   onError: (errorMsg: string) => void;
@@ -20,6 +20,8 @@ export class SpeechService {
   private language: string = 'id-ID';
   private currentInterim: string = '';
   private lastInterimText: string = '';
+  private currentResultIndex: number = -1;
+  private flushedResultIndex: number = -1;
   private silenceTimer: any = null;
   private callbacks: SpeechCallbacks;
 
@@ -45,10 +47,15 @@ export class SpeechService {
     this.clearSilenceTimer();
     const textToCommit = this.currentInterim.trim();
     if (textToCommit) {
+      const shouldReplaceLast =
+        this.currentResultIndex !== -1 &&
+        this.flushedResultIndex === this.currentResultIndex;
+
+      this.flushedResultIndex = this.currentResultIndex;
       this.currentInterim = '';
       this.lastInterimText = '';
       this.callbacks.onInterimTranscript('');
-      this.callbacks.onFinalTranscript(textToCommit);
+      this.callbacks.onFinalTranscript(textToCommit, shouldReplaceLast);
     }
   }
 
@@ -57,7 +64,9 @@ export class SpeechService {
     const SpeechRecognitionClass = win.SpeechRecognition || win.webkitSpeechRecognition;
 
     if (!SpeechRecognitionClass) {
-      this.callbacks.onError('Browser ini belum mendukung Web Speech API. Disarankan menggunakan Google Chrome atau Microsoft Edge.');
+      this.callbacks.onError(
+        'Browser ini belum mendukung Web Speech API. Disarankan menggunakan Google Chrome atau Microsoft Edge.'
+      );
       return;
     }
 
@@ -65,9 +74,12 @@ export class SpeechService {
       this.recognition = new SpeechRecognitionClass();
       this.recognition.continuous = true;
       this.recognition.interimResults = true;
+      this.recognition.maxAlternatives = 1;
       this.recognition.lang = this.language;
 
       this.recognition.onstart = () => {
+        this.currentResultIndex = -1;
+        this.flushedResultIndex = -1;
         if (!this.isPaused) {
           this.callbacks.onStateChange('recording');
         }
@@ -75,26 +87,33 @@ export class SpeechService {
 
       this.recognition.onresult = (event: any) => {
         let interimStr = '';
-        let finalStr = '';
+        let latestInterimIndex = -1;
 
         for (let i = event.resultIndex; i < event.results.length; ++i) {
           const transcriptChunk = event.results[i][0].transcript;
           if (event.results[i].isFinal) {
-            finalStr += transcriptChunk + ' ';
+            const finalChunk = transcriptChunk.trim();
+            if (finalChunk) {
+              const shouldReplaceLast = this.flushedResultIndex === i;
+              if (this.flushedResultIndex === i) {
+                this.flushedResultIndex = -1;
+              }
+              this.clearSilenceTimer();
+              this.currentInterim = '';
+              this.lastInterimText = '';
+              this.callbacks.onInterimTranscript('');
+              this.callbacks.onFinalTranscript(finalChunk, shouldReplaceLast);
+            }
           } else {
+            if (latestInterimIndex === -1) {
+              latestInterimIndex = i;
+            }
             interimStr += transcriptChunk;
           }
         }
 
-        if (finalStr.trim()) {
-          this.clearSilenceTimer();
-          this.currentInterim = '';
-          this.lastInterimText = '';
-          this.callbacks.onInterimTranscript('');
-          this.callbacks.onFinalTranscript(finalStr);
-        }
-
         if (interimStr.trim()) {
+          this.currentResultIndex = latestInterimIndex;
           const trimmedInterim = interimStr.trim();
           const isNewText = trimmedInterim !== this.lastInterimText.trim();
           this.currentInterim = interimStr;
@@ -106,22 +125,23 @@ export class SpeechService {
             this.clearSilenceTimer();
             this.silenceTimer = setTimeout(() => {
               this.flushInterim();
-            }, 800);
+            }, 900);
           }
         }
       };
 
       this.recognition.onerror = (event: any) => {
-        // Ignorable errors like 'no-speech' or 'aborted'
         if (event.error === 'no-speech' || event.error === 'aborted') {
           return;
         }
 
         let userFriendlyError = `Speech recognition error: ${event.error}`;
         if (event.error === 'not-allowed') {
-          userFriendlyError = 'Akses mikrofon ditolak. Izinkan mikrofon di pengaturan browser untuk mulai merekam.';
+          userFriendlyError =
+            'Akses mikrofon ditolak. Izinkan mikrofon di pengaturan browser untuk mulai merekam.';
         } else if (event.error === 'network') {
-          userFriendlyError = 'Kendala jaringan koneksi speech recognition. Pastikan internet Anda aktif.';
+          userFriendlyError =
+            'Kendala jaringan koneksi speech recognition. Pastikan internet Anda aktif.';
         }
         this.callbacks.onError(userFriendlyError);
       };
@@ -129,26 +149,31 @@ export class SpeechService {
       this.recognition.onend = () => {
         this.clearSilenceTimer();
 
-        // If there was unfinalized speech when recognition ended/paused, finalize it so it is not lost
         if (this.currentInterim.trim()) {
           const text = this.currentInterim.trim();
+          const shouldReplaceLast =
+            this.currentResultIndex !== -1 &&
+            this.flushedResultIndex === this.currentResultIndex;
           this.currentInterim = '';
           this.lastInterimText = '';
           this.callbacks.onInterimTranscript('');
-          this.callbacks.onFinalTranscript(text);
+          this.callbacks.onFinalTranscript(text, shouldReplaceLast);
         }
 
-        // Auto restart after a micro-tick if still supposed to be listening and not paused
+        this.currentResultIndex = -1;
+        this.flushedResultIndex = -1;
+
+        // Auto restart immediately if still listening and not paused
         if (this.isListening && !this.isPaused) {
           setTimeout(() => {
             if (this.isListening && !this.isPaused && this.recognition) {
               try {
                 this.recognition.start();
-              } catch (e) {
+              } catch {
                 // ignore start collisions
               }
             }
-          }, 50);
+          }, 30);
         } else if (this.isPaused) {
           this.callbacks.onStateChange('paused');
         } else {
@@ -168,7 +193,6 @@ export class SpeechService {
       this.recognition.lang = lang;
       if (wasListening && !this.isPaused) {
         this.recognition.stop();
-        // onend will automatically restart with new lang
       }
     }
   }
@@ -183,11 +207,13 @@ export class SpeechService {
     this.isPaused = false;
     this.currentInterim = '';
     this.lastInterimText = '';
+    this.currentResultIndex = -1;
+    this.flushedResultIndex = -1;
     this.clearSilenceTimer();
     try {
       this.recognition.start();
       this.callbacks.onStateChange('recording');
-    } catch (e) {
+    } catch {
       // might already be started
     }
   }
@@ -195,18 +221,13 @@ export class SpeechService {
   public pause(): void {
     if (!this.isListening || this.isPaused) return;
     this.isPaused = true;
-    this.clearSilenceTimer();
-    if (this.currentInterim.trim()) {
-      const text = this.currentInterim.trim();
-      this.currentInterim = '';
-      this.lastInterimText = '';
-      this.callbacks.onInterimTranscript('');
-      this.callbacks.onFinalTranscript(text);
-    }
+    this.flushInterim();
+    this.currentResultIndex = -1;
+    this.flushedResultIndex = -1;
     if (this.recognition) {
       try {
         this.recognition.stop();
-      } catch (e) {}
+      } catch {}
     }
     this.callbacks.onStateChange('paused');
     this.callbacks.onInterimTranscript('');
@@ -217,30 +238,27 @@ export class SpeechService {
     this.isPaused = false;
     this.currentInterim = '';
     this.lastInterimText = '';
+    this.currentResultIndex = -1;
+    this.flushedResultIndex = -1;
     this.clearSilenceTimer();
     if (this.recognition) {
       try {
         this.recognition.start();
         this.callbacks.onStateChange('recording');
-      } catch (e) {}
+      } catch {}
     }
   }
 
   public stop(): void {
     this.isListening = false;
     this.isPaused = false;
-    this.clearSilenceTimer();
-    if (this.currentInterim.trim()) {
-      const text = this.currentInterim.trim();
-      this.currentInterim = '';
-      this.lastInterimText = '';
-      this.callbacks.onInterimTranscript('');
-      this.callbacks.onFinalTranscript(text);
-    }
+    this.flushInterim();
+    this.currentResultIndex = -1;
+    this.flushedResultIndex = -1;
     if (this.recognition) {
       try {
         this.recognition.stop();
-      } catch (e) {}
+      } catch {}
     }
     this.callbacks.onStateChange('idle');
     this.callbacks.onInterimTranscript('');

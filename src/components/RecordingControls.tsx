@@ -156,7 +156,7 @@ export const RecordingControls: React.FC<RecordingControlsProps> = ({
               type="file"
               ref={fileInputRef}
               onChange={handleFileChange}
-              accept="audio/*,video/mp4,video/webm,.mp3,.wav,.m4a,.ogg,.webm,.mp4"
+              accept="audio/*,video/mp4,video/webm,.mp3,.wav,.m4a,.aac,.ogg,.webm,.mp4"
               className="hidden"
             />
           </>

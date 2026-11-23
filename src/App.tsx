@@ -3,6 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, getSetting, type TranscriptRecord } from './db';
 import { SpeechService, type SpeechState } from './services/speechRecognition';
 import { AudioRecorderService } from './services/audioRecorder';
+import { splitAudioFileForWhisper } from './services/audioChunker';
 import { transcribeAudio, type AISettings } from './services/aiService';
 import { Sidebar } from './components/Sidebar';
 import { RecordingControls, type TranscriptionEngine } from './components/RecordingControls';
@@ -11,7 +12,7 @@ import { ExportToolbar } from './components/ExportToolbar';
 import { SettingsModal } from './components/SettingsModal';
 import { PanelLeft, Loader2 } from 'lucide-react';
 
-// Instant term normalization for common enterprise/project homophones
+// Fast phonetic & homophone normalization for Indonesian enterprise/technical terms
 function cleanSpeechTerms(text: string): string {
   if (!text) return text;
   return text
@@ -25,7 +26,55 @@ function cleanSpeechTerms(text: string): string {
     .replace(/\bkepalaku teknis\b/gi, 'evaluasi teknis')
     .replace(/\b(tbc|ibc)\s+rkm\b/gi, 'EPC RKM')
     .replace(/\bibc\b/gi, 'EPC')
-    .replace(/\brtm\b/gi, 'RKM');
+    .replace(/\brtm\b/gi, 'RKM')
+    .replace(/\bre-?wok\b/gi, 'rework')
+    .replace(/\bbek\s*en\b/gi, 'backend')
+    .replace(/\bfron\s*en\b/gi, 'frontend')
+    .replace(/\bdata\s*bes\b/gi, 'database')
+    .replace(/\bdi\s*ploy\b/gi, 'deploy');
+}
+
+/**
+ * Computes word-level overlap similarity (0..1) between two lines
+ * to detect when an utterance is an updated revision of the previous line.
+ */
+function computeWordOverlap(a: string, b: string): number {
+  const normA = a
+    .toLowerCase()
+    .replace(/[.,?!;:()"'-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const normB = b
+    .toLowerCase()
+    .replace(/[.,?!;:()"'-]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (normA.length === 0 || normB.length === 0) return 0;
+
+  // Check prefix word match (common when Chrome revises the end of an interim sentence)
+  const minLen = Math.min(normA.length, normB.length);
+  let prefixMatches = 0;
+  for (let i = 0; i < minLen; i++) {
+    if (normA[i] === normB[i]) {
+      prefixMatches++;
+    } else {
+      break;
+    }
+  }
+  if (minLen >= 3 && prefixMatches / minLen >= 0.65) {
+    return 0.85;
+  }
+
+  const setA = new Set(normA);
+  const setB = new Set(normB);
+  let intersection = 0;
+  for (const w of setA) {
+    if (setB.has(w)) intersection++;
+  }
+  return intersection / Math.min(setA.size, setB.size);
 }
 
 export function App() {
@@ -42,17 +91,22 @@ export function App() {
   const [aiSummary, setAiSummary] = useState<string | undefined>(undefined);
   const [aiActionItems, setAiActionItems] = useState<string | undefined>(undefined);
 
-  // Recording Engine & States - Default to whisper if key exists
+  // Recording Engine & States
   const [engine, setEngine] = useState<TranscriptionEngine>('whisper');
   const [speechState, setSpeechState] = useState<SpeechState>('idle');
   const [isSupported, setIsSupported] = useState(true);
   const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const [uploadStatusMessage, setUploadStatusMessage] = useState('');
-  const isTranscribingWhisper = isUploadingAudio;
+  const [activeWhisperChunks, setActiveWhisperChunks] = useState(0);
+  const isTranscribingWhisper = isUploadingAudio || activeWhisperChunks > 0;
 
   // Service References
   const speechServiceRef = useRef<SpeechService | null>(null);
   const audioRecorderRef = useRef<AudioRecorderService | null>(null);
+
+  // Hybrid Live + Whisper coordination refs
+  const currentChunkProvisionalLinesRef = useRef<string[]>([]);
+  const whisperQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // Modals & UI Layout
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -90,9 +144,7 @@ export function App() {
 
   // Save current record to IndexedDB
   const persistTranscript = useCallback(
-    async (
-      overrideData?: Partial<TranscriptRecord>
-    ) => {
+    async (overrideData?: Partial<TranscriptRecord>) => {
       const recordData: Partial<TranscriptRecord> = {
         title,
         content: contentRef.current,
@@ -107,7 +159,11 @@ export function App() {
       if (activeId) {
         await db.transcripts.update(activeId, recordData);
       } else {
-        if (recordData.content?.trim() || recordData.title !== 'Transkrip Baru' || recordData.durationSeconds! > 0) {
+        if (
+          recordData.content?.trim() ||
+          recordData.title !== 'Transkrip Baru' ||
+          recordData.durationSeconds! > 0
+        ) {
           const newId = await db.transcripts.add({
             title: recordData.title || 'Transkrip Baru',
             content: recordData.content || '',
@@ -125,77 +181,242 @@ export function App() {
     [activeId, title, durationSeconds, language, aiSummary, aiActionItems]
   );
 
-  // Initialize Speech Services & Audio Recorder
-  useEffect(() => {
-    setIsSupported(SpeechService.isSupported());
-    audioRecorderRef.current = new AudioRecorderService();
-    setEngine('whisper');
-  }, []);
+  /**
+   * Commits an utterance into the transcript with multi-stage deduplication:
+   * - Supports explicit `replaceLastLine` when Web Speech API updates a previously flushed resultIndex
+   * - Detects cumulative extensions and high word-overlap revisions
+   */
+  const commitUtterance = useCallback((text: string, replaceLastLine: boolean = false) => {
+    const cleaned = cleanSpeechTerms(text);
+    const trimmed = cleaned.trim();
+    if (!trimmed) return;
 
-  // Commit an utterance into the transcript (strictly and faithfully records what was in "Bicara Aktif" with smart deduplication)
-  const commitUtterance = useCallback(
-    (text: string) => {
-      const cleaned = cleanSpeechTerms(text);
-      const trimmed = cleaned.trim();
-      if (!trimmed) return;
+    // Track provisional lines spoken during the current audio chunk so Whisper can upgrade them accurately
+    const provList = currentChunkProvisionalLinesRef.current;
+    if (replaceLastLine && provList.length > 0) {
+      provList[provList.length - 1] = trimmed;
+    } else if (provList.length > 0) {
+      const lastProv = provList[provList.length - 1];
+      const normLastProv = lastProv.replace(/[.,?!]+$/, '').trim().toLowerCase();
+      const normNewProv = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
+      if (
+        normNewProv === normLastProv ||
+        normNewProv.startsWith(normLastProv) ||
+        computeWordOverlap(normLastProv, normNewProv) >= 0.75
+      ) {
+        provList[provList.length - 1] = trimmed;
+      } else {
+        provList.push(trimmed);
+      }
+    } else {
+      provList.push(trimmed);
+    }
 
-      setContent((prev) => {
-        if (!prev) {
-          contentRef.current = trimmed;
-          return trimmed;
+    setContent((prev) => {
+      if (!prev) {
+        contentRef.current = trimmed;
+        return trimmed;
+      }
+
+      const lines = prev.split('\n');
+      let lastNonEmptyIndex = lines.length - 1;
+      while (lastNonEmptyIndex >= 0 && !lines[lastNonEmptyIndex].trim()) {
+        lastNonEmptyIndex--;
+      }
+
+      if (lastNonEmptyIndex >= 0) {
+        const lastLine = lines[lastNonEmptyIndex].trim();
+        const normLast = lastLine.replace(/[.,?!]+$/, '').trim().toLowerCase();
+        const normTrimmed = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
+
+        // Case 0: Explicit replacement of the same Web Speech resultIndex
+        if (replaceLastLine) {
+          lines[lastNonEmptyIndex] = trimmed;
+          const updated = lines.join('\n');
+          contentRef.current = updated;
+          return updated;
         }
 
-        const lines = prev.split('\n');
-        let lastNonEmptyIndex = lines.length - 1;
-        while (lastNonEmptyIndex >= 0 && !lines[lastNonEmptyIndex].trim()) {
-          lastNonEmptyIndex--;
+        // Case 1: Exact duplicate -> ignore
+        if (normLast === normTrimmed) {
+          return prev;
         }
 
-        if (lastNonEmptyIndex >= 0) {
-          const lastLine = lines[lastNonEmptyIndex].trim();
-          const normLast = lastLine.replace(/[.,?!]+$/, '').trim().toLowerCase();
-          const normTrimmed = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
+        // Case 2: New text is an extended continuation of the last line -> update in-place
+        if (
+          normTrimmed.startsWith(normLast + ' ') ||
+          (normLast.length > 3 && normTrimmed.startsWith(normLast))
+        ) {
+          lines[lastNonEmptyIndex] = trimmed;
+          const updated = lines.join('\n');
+          contentRef.current = updated;
+          return updated;
+        }
 
-          // Case 1: Exact duplicate -> ignore
-          if (normLast === normTrimmed) {
-            return prev;
-          }
+        // Case 3: The last line already includes this new text completely -> ignore
+        if (normLast.startsWith(normTrimmed + ' ') || normLast === normTrimmed) {
+          return prev;
+        }
 
-          // Case 2: New text is an extended continuation of the last line -> update/replace the last line!
-          // This completely eliminates cumulative interim duplication
-          if (normTrimmed.startsWith(normLast + ' ') || (normLast.length > 3 && normTrimmed.startsWith(normLast))) {
+        // Case 4: High word-overlap revision of the same utterance -> replace in-place if longer/more complete
+        if (
+          normLast.split(/\s+/).length >= 3 &&
+          computeWordOverlap(normLast, normTrimmed) >= 0.78
+        ) {
+          if (trimmed.length >= lastLine.length - 3) {
             lines[lastNonEmptyIndex] = trimmed;
             const updated = lines.join('\n');
             contentRef.current = updated;
             return updated;
           }
+          return prev;
+        }
+      }
 
-          // Case 3: The last line already includes this new text completely -> ignore
-          if (normLast.startsWith(normTrimmed + ' ') || normLast === normTrimmed) {
-            return prev;
-          }
+      // Case 5: Brand new utterance -> append on new line
+      const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+      const updated = prev + separator + trimmed;
+      contentRef.current = updated;
+      return updated;
+    });
+  }, []);
+
+  /**
+   * Processes a live audio chunk with Whisper AI in the background and upgrades
+   * the provisional browser lines (or appends new speech that the browser missed).
+   */
+  const handleLiveAudioChunk = useCallback(
+    (audioBlob: Blob) => {
+      // Snapshot the provisional lines that Web Speech API produced during this audio window
+      const provisionalSnapshot = [...currentChunkProvisionalLinesRef.current];
+      currentChunkProvisionalLinesRef.current = [];
+
+      // Enqueue sequential Whisper transcription so chunks never race out of order
+      whisperQueueRef.current = whisperQueueRef.current.then(async () => {
+        const settings = await getSetting<AISettings>('ai_settings', {
+          provider: 'groq',
+          apiKey: '',
+        });
+
+        // If no API key is configured, rely cleanly on the provisional live speech transcript
+        if (!settings.apiKey || !settings.apiKey.trim()) {
+          return;
         }
 
-        // Case 4: Brand new utterance -> append on new line
-        const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-        const updated = prev + separator + trimmed;
-        contentRef.current = updated;
-        return updated;
+        setActiveWhisperChunks((c) => c + 1);
+        try {
+          const currentText = contentRef.current || '';
+          const res = await transcribeAudio(settings, audioBlob, language, currentText.slice(-260));
+          if (!res.success || !res.result || !res.result.trim()) {
+            return;
+          }
+
+          const whisperCleaned = cleanSpeechTerms(res.result.trim());
+          if (!whisperCleaned) return;
+
+          setContent((prev) => {
+            if (!prev) {
+              contentRef.current = whisperCleaned;
+              return whisperCleaned;
+            }
+
+            // 1. If we have a snapshot of provisional browser lines from this chunk window, replace them in-place
+            if (provisionalSnapshot.length > 0) {
+              const provisionalBlock = provisionalSnapshot.join('\n');
+              const blockIdx = prev.lastIndexOf(provisionalBlock);
+              if (blockIdx !== -1) {
+                const updated =
+                  prev.slice(0, blockIdx) +
+                  whisperCleaned +
+                  prev.slice(blockIdx + provisionalBlock.length);
+                contentRef.current = updated;
+                return updated;
+              }
+
+              // Fallback: match the first provisional line up to the last provisional line
+              const lines = prev.split('\n');
+              const firstProv = provisionalSnapshot[0].trim().toLowerCase();
+              let matchStart = -1;
+              for (let i = lines.length - 1; i >= Math.max(0, lines.length - 8); i--) {
+                const normLine = lines[i].trim().toLowerCase();
+                if (
+                  normLine === firstProv ||
+                  computeWordOverlap(normLine, firstProv) >= 0.5
+                ) {
+                  matchStart = i;
+                  break;
+                }
+              }
+
+              if (matchStart !== -1) {
+                const removeCount = Math.min(
+                  provisionalSnapshot.length,
+                  lines.length - matchStart
+                );
+                lines.splice(matchStart, removeCount, whisperCleaned);
+                const updated = lines.join('\n');
+                contentRef.current = updated;
+                return updated;
+              }
+            }
+
+            // 2. If provisionalSnapshot was empty (e.g. Web Speech flushed slightly after VAD cut, or missed soft speech)
+            const lines = prev.split('\n').filter((l) => l.trim().length > 0);
+            if (lines.length > 0) {
+              const lastLine = lines[lines.length - 1];
+              const overlap = computeWordOverlap(lastLine, whisperCleaned);
+              if (overlap >= 0.4) {
+                lines[lines.length - 1] = whisperCleaned;
+                const updated = lines.join('\n');
+                contentRef.current = updated;
+                return updated;
+              }
+            }
+
+            // 3. Brand new speech caught by Whisper that Web Speech API missed completely
+            const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+            const updated = prev + separator + whisperCleaned;
+            contentRef.current = updated;
+            return updated;
+          });
+        } catch (err) {
+          console.warn('Live Whisper chunk error (keeping provisional text):', err);
+        } finally {
+          setActiveWhisperChunks((c) => Math.max(0, c - 1));
+        }
       });
     },
-    []
+    [language]
   );
 
-  // Speech Recognition for live visual feedback
+  // Initialize Speech Services & Audio Recorder
+  useEffect(() => {
+    setIsSupported(SpeechService.isSupported());
+    audioRecorderRef.current = new AudioRecorderService({
+      enableVAD: true,
+      silenceThresholdMs: 950,
+      minChunkDurationMs: 3200,
+      maxChunkDurationMs: 9000,
+      hardLimitDurationMs: 14000,
+    });
+    setEngine('whisper');
+  }, []);
+
+  // Bind latest live chunk handler to AudioRecorderService
+  useEffect(() => {
+    audioRecorderRef.current?.setOnChunkReady(handleLiveAudioChunk);
+  }, [handleLiveAudioChunk]);
+
+  // Speech Recognition for 0ms live visual feedback
   useEffect(() => {
     speechServiceRef.current = new SpeechService(
       {
-        onFinalTranscript: (text) => {
+        onFinalTranscript: (text, replaceLastLine) => {
           interimSpeechRef.current = '';
           setInterimContent('');
           const trimmed = cleanSpeechTerms(text).trim();
           if (trimmed) {
-            commitUtterance(trimmed);
+            commitUtterance(trimmed, replaceLastLine);
           }
         },
         onInterimTranscript: (text) => {
@@ -267,7 +488,9 @@ export function App() {
       });
       if (!settings.apiKey) {
         setIsSettingsOpen(true);
-        alert('Mode Whisper AI membutuhkan API Key (Groq / OpenAI / Gemini). Silakan simpan API Key Anda di menu Pengaturan.');
+        alert(
+          'Mode Whisper AI membutuhkan API Key (Groq / OpenAI / Gemini). Silakan simpan API Key Anda di menu Pengaturan.'
+        );
         return;
       }
     }
@@ -276,11 +499,13 @@ export function App() {
 
   // Controls Handlers
   const handleStart = async () => {
+    currentChunkProvisionalLinesRef.current = [];
+
     // 1. Ensure live recognition always starts immediately so user can talk without lag
     speechServiceRef.current?.setLanguage(language);
     speechServiceRef.current?.start();
 
-    // 2. Start hardware audio recorder in parallel
+    // 2. Start hardware audio recorder + VAD in parallel for Whisper AI verification
     if (engine === 'whisper') {
       try {
         await audioRecorderRef.current?.start();
@@ -309,7 +534,7 @@ export function App() {
     if (interimSpeechRef.current.trim()) {
       const remainingSpeech = interimSpeechRef.current.trim();
       interimSpeechRef.current = '';
-      await commitUtterance(remainingSpeech);
+      commitUtterance(remainingSpeech);
     }
 
     speechServiceRef.current?.stop();
@@ -318,6 +543,8 @@ export function App() {
     if (engine === 'whisper' && audioRecorderRef.current) {
       try {
         await audioRecorderRef.current.stop();
+        // Wait for any in-flight Whisper chunk to finish before final persist
+        await whisperQueueRef.current;
         persistTranscript();
       } catch (err: any) {
         console.error('Audio recorder stop error:', err);
@@ -333,47 +560,88 @@ export function App() {
     speechServiceRef.current?.setLanguage(newLang);
   };
 
-  // Upload Audio File Transcription Handler
+  /**
+   * Upload Audio File Transcription Handler with Automatic 16kHz Mono Chunking
+   * Supports long 1-3+ hour meeting files and files > 25MB seamlessly.
+   */
   const handleUploadAudio = async (file: File) => {
-    // 1. Check file size (max 25MB for Groq & OpenAI Whisper)
-    const maxSizeBytes = 25 * 1024 * 1024;
-    if (file.size > maxSizeBytes) {
-      alert(
-        `Ukuran file "${file.name}" adalah ${(file.size / (1024 * 1024)).toFixed(1)} MB. Batas maksimal file audio untuk Whisper API adalah 25 MB.`
-      );
-      return;
-    }
-
-    // 2. Check API Key
+    // 1. Check API Key
     const settings = await getSetting<AISettings>('ai_settings', {
       provider: 'groq',
       apiKey: '',
     });
     if (!settings.apiKey || !settings.apiKey.trim()) {
       setIsSettingsOpen(true);
-      alert('Untuk mentranskripsi file rekaman audio, dibutuhkan API Key Whisper AI (Groq / OpenAI / Gemini). Silakan masukkan API Key Anda di Pengaturan.');
+      alert(
+        'Untuk mentranskripsi file rekaman audio, dibutuhkan API Key Whisper AI (Groq / OpenAI / Gemini). Silakan masukkan API Key Anda di Pengaturan.'
+      );
       return;
     }
 
-    // 3. Process transcription
+    // 2. Process transcription (auto-chunking if > 5.5 minutes or > 20 MB)
     try {
       setIsUploadingAudio(true);
-      setUploadStatusMessage(`Mentranskripsi "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)... Harap tunggu sebentar.`);
+      setUploadStatusMessage(
+        `Menyiapkan "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`
+      );
 
-      const res = await transcribeAudio(settings, file, language);
-      if (res.success && typeof res.result === 'string' && res.result.trim()) {
-        const fileBaseName = file.name.replace(/\.[^/.]+$/, '');
-        const newTitle = `Transkrip - ${fileBaseName}`;
-        setTitle(newTitle);
-        setContent(res.result.trim());
-        contentRef.current = res.result.trim();
+      const { segments, durationSeconds: decodedDuration } = await splitAudioFileForWhisper(
+        file,
+        (msg) => setUploadStatusMessage(msg)
+      );
+
+      const fileBaseName = file.name.replace(/\.[^/.]+$/, '');
+      const newTitle = `Transkrip - ${fileBaseName}`;
+      setTitle(newTitle);
+      if (decodedDuration > 0) {
+        setDurationSeconds(decodedDuration);
+      }
+
+      let accumulatedTranscript = '';
+
+      for (let i = 0; i < segments.length; i++) {
+        const seg = segments[i];
+        if (segments.length > 1) {
+          const pct = Math.round(((i + 1) / segments.length) * 100);
+          setUploadStatusMessage(
+            `Mentranskripsi "${file.name}" — Bagian ${i + 1} dari ${segments.length} (${pct}%)...`
+          );
+        } else {
+          setUploadStatusMessage(
+            `Mentranskripsi "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB) dengan Whisper AI...`
+          );
+        }
+
+        const contextTail = accumulatedTranscript ? accumulatedTranscript.slice(-240) : undefined;
+        const res = await transcribeAudio(settings, seg.blob, language, contextTail);
+
+        if (!res.success) {
+          throw new Error(
+            res.error || `Gagal mentranskripsi bagian ${i + 1} dari ${segments.length}.`
+          );
+        }
+
+        const cleanedChunk = cleanSpeechTerms((res.result || '').trim());
+        if (cleanedChunk) {
+          accumulatedTranscript = accumulatedTranscript
+            ? `${accumulatedTranscript}\n${cleanedChunk}`
+            : cleanedChunk;
+
+          // Stream each completed segment live to the editor so the user can start reading immediately
+          setContent(accumulatedTranscript);
+          contentRef.current = accumulatedTranscript;
+        }
+      }
+
+      if (accumulatedTranscript.trim()) {
         setEngine('whisper');
         await persistTranscript({
           title: newTitle,
-          content: res.result.trim(),
+          content: accumulatedTranscript.trim(),
+          durationSeconds: decodedDuration || durationSeconds,
         });
       } else {
-        alert(`Gagal mentranskripsi file audio: ${res.error || 'Terjadi kesalahan saat memproses file audio.'}`);
+        alert('Tidak ada suara percakapan yang terdeteksi di dalam file audio tersebut.');
       }
     } catch (err: any) {
       console.error('Audio file upload transcription error:', err);
@@ -388,7 +656,12 @@ export function App() {
     e.preventDefault();
     if (speechState !== 'idle' || isUploadingAudio) return;
     const file = e.dataTransfer.files?.[0];
-    if (file && (file.type.startsWith('audio/') || file.type.startsWith('video/') || /\.(mp3|wav|m4a|ogg|webm|mp4)$/i.test(file.name))) {
+    if (
+      file &&
+      (file.type.startsWith('audio/') ||
+        file.type.startsWith('video/') ||
+        /\.(mp3|wav|m4a|aac|ogg|webm|mp4)$/i.test(file.name))
+    ) {
       handleUploadAudio(file);
     }
   };
@@ -409,6 +682,7 @@ export function App() {
       }
     }
 
+    currentChunkProvisionalLinesRef.current = [];
     setActiveId(null);
     setTitle('Transkrip Baru');
     setContent('');
@@ -425,6 +699,7 @@ export function App() {
         audioRecorderRef.current?.stop();
       }
     }
+    currentChunkProvisionalLinesRef.current = [];
     const target = transcripts.find((t) => t.id === id);
     if (target) {
       setActiveId(target.id!);
@@ -453,7 +728,9 @@ export function App() {
     language,
     aiSummary,
     aiActionItems,
-    createdAt: activeId ? transcripts.find((t) => t.id === activeId)?.createdAt || new Date() : new Date(),
+    createdAt: activeId
+      ? transcripts.find((t) => t.id === activeId)?.createdAt || new Date()
+      : new Date(),
   };
 
   return (
@@ -489,7 +766,9 @@ export function App() {
           </button>
           <div className="flex items-center gap-2">
             <img src="/favicon.svg" alt="Logo" className="w-5 h-5 rounded-md" />
-            <span className="text-xs font-bold text-slate-800 dark:text-slate-100">Transkrip Kilat</span>
+            <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
+              Transkrip Kilat
+            </span>
           </div>
         </div>
 
@@ -498,7 +777,10 @@ export function App() {
           <div className="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-3 rounded-2xl flex items-center justify-between gap-3 shadow-md animate-pulse">
             <div className="flex items-center gap-3 text-xs sm:text-sm font-semibold">
               <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin text-indigo-200 shrink-0" />
-              <span>{uploadStatusMessage || 'Sedang memproses dan mentranskripsi file rekaman audio...'}</span>
+              <span>
+                {uploadStatusMessage ||
+                  'Sedang memproses dan mentranskripsi file rekaman audio...'}
+              </span>
             </div>
             <span className="text-[11px] bg-white/20 px-2.5 py-1 rounded-lg font-mono uppercase font-bold shrink-0">
               Whisper AI
@@ -540,9 +822,7 @@ export function App() {
         />
 
         {/* 3. Export & Action Toolbar */}
-        <ExportToolbar
-          currentRecord={currentRecord}
-        />
+        <ExportToolbar currentRecord={currentRecord} />
       </main>
 
       {/* Settings Modal (BYOK AI) */}

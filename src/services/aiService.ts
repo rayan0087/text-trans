@@ -107,6 +107,76 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
+ * Known Whisper subtitle hallucinations that appear during silence or low-energy audio
+ */
+const WHISPER_HALLUCINATION_PATTERNS: RegExp[] = [
+  /^terima\s+kasih\s+(telah|sudah)\s+menonton[.!?\s]*$/i,
+  /^jangan\s+lupa\s+(like|subscribe|komen|share)[.!?\s]*$/i,
+  /^(subtitel|subtitle|transkrip)\s+(oleh|by)\b.*$/i,
+  /^diterjemahkan\s+oleh\b.*$/i,
+  /^sampai\s+jumpa\s+di\s+video\s+berikutnya[.!?\s]*$/i,
+  /^thank\s+you\s+for\s+watching[.!?\s]*$/i,
+  /^please\s+subscribe[.!?\s]*$/i,
+  /^selamat\s+menikmati[.!?\s]*$/i,
+  /^musik[.!?\s]*$/i,
+  /^\[.*?(musik|music|applause|tertawa|hening).*?\]$/i,
+];
+
+/**
+ * Cleans and filters Whisper output:
+ * - Removes subtitle hallucinations on silent frames
+ * - Strips accidental prompt echoes
+ * - Collapses degenerate repetitive loops (e.g. "iya iya iya iya iya")
+ */
+export function filterWhisperHallucinations(rawText: string): string {
+  if (!rawText) return '';
+  let text = rawText.trim();
+
+  // Remove accidental echo of our natural primer
+  text = text
+    .replace(
+      /Baik,\s*untuk\s*rapat\s*proyek,\s*pengadaan,\s*ERP,\s*evaluasi\s*teknis\s*vendor[^.?!]*[.?!]\s*/gi,
+      ''
+    )
+    .trim();
+
+  if (!text) return '';
+
+  // Check whole-line hallucination patterns
+  for (const pattern of WHISPER_HALLUCINATION_PATTERNS) {
+    if (pattern.test(text)) {
+      return '';
+    }
+  }
+
+  // Filter sentence by sentence
+  const sentences = text
+    .replace(/([.?!])\s+/g, '$1\n')
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => {
+      if (!s || s.length < 2) return false;
+      for (const pattern of WHISPER_HALLUCINATION_PATTERNS) {
+        if (pattern.test(s)) return false;
+      }
+      return true;
+    })
+    .map((s) => {
+      // Collapse degenerate consecutive word loops (e.g. word repeated > 4 times in a row)
+      return s.replace(/\b(\w+)(?:\s+\1){4,}\b/gi, '$1');
+    });
+
+  return sentences.join('\n');
+}
+
+/**
+ * Format raw transcript text into neat sentence lines
+ */
+export function formatIntoSentenceLines(rawText: string): string {
+  return filterWhisperHallucinations(rawText);
+}
+
+/**
  * Call Google Gemini API (Text) with version & model fallbacks
  */
 async function callGemini(apiKey: string, prompt: string, model: string = 'gemini-1.5-flash'): Promise<string> {
@@ -131,7 +201,7 @@ async function callGemini(apiKey: string, prompt: string, model: string = 'gemin
             },
           ],
           generationConfig: {
-            temperature: 0.3,
+            temperature: 0.2,
           },
         }),
       });
@@ -155,13 +225,22 @@ async function callGemini(apiKey: string, prompt: string, model: string = 'gemin
 /**
  * Call Gemini Audio Multimodal with fallbacks
  */
-async function callGeminiAudio(apiKey: string, base64Audio: string, mimeType: string): Promise<string> {
+async function callGeminiAudio(
+  apiKey: string,
+  base64Audio: string,
+  mimeType: string,
+  contextPrompt?: string
+): Promise<string> {
   const attempts = [
     { ver: 'v1beta', model: 'gemini-1.5-flash' },
     { ver: 'v1beta', model: 'gemini-1.5-flash-latest' },
     { ver: 'v1beta', model: 'gemini-2.0-flash' },
     { ver: 'v1', model: 'gemini-1.5-flash' },
   ];
+
+  const contextHint = contextPrompt
+    ? ` Konteks kalimat sebelumnya: "${contextPrompt.slice(-200)}".`
+    : '';
 
   let lastError = '';
   for (const attempt of attempts) {
@@ -181,7 +260,7 @@ async function callGeminiAudio(apiKey: string, base64Audio: string, mimeType: st
                   },
                 },
                 {
-                  text: 'Tolong transkripsikan audio percakapan ini ke dalam teks secara sangat akurat. Pertahankan istilah teknis/asing (seperti rework, DNS, SMS, database, deploy, dsb) sesuai konteks percakapan. Berikan tanda baca yang lengkap dan huruf kapital yang benar. Keluarkan HANYA teks hasil transkripsinya saja tanpa kata pengantar atau penutup apapun.',
+                  text: `Transkripsikan audio percakapan Bahasa Indonesia ini ke dalam teks secara 100% akurat sesuai yang diucapkan. Pertahankan istilah proyek/teknis (seperti Internal Project, RFQ, PO, PR, PB, ETA, EPC, RKM, AJG, vendor, evaluasi teknis, rework, database, backend, API) dan tanda baca yang lengkap.${contextHint} Jika audio hanya berisi hening/kebisingan tanpa ucapan manusia, keluarkan string kosong. Keluarkan HANYA teks hasil transkripsinya saja tanpa penjelasan apapun.`,
                 },
               ],
             },
@@ -227,7 +306,7 @@ async function callOpenAICompatible(
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      temperature: 0.3,
+      temperature: 0.2,
     }),
   });
 
@@ -245,20 +324,7 @@ async function callOpenAICompatible(
 }
 
 /**
- * Format raw transcript text into neat sentence lines
- */
-export function formatIntoSentenceLines(rawText: string): string {
-  if (!rawText) return '';
-  const sentences = rawText
-    .replace(/([.?!])\s+/g, '$1\n')
-    .split('\n')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  return sentences.join('\n');
-}
-
-/**
- * Transcribe Audio using Whisper AI (Groq Whisper / OpenAI Whisper / Gemini Audio)
+ * Transcribe Audio using Whisper AI (Groq Whisper Large v3 Turbo / OpenAI Whisper / Gemini Audio)
  */
 export async function transcribeAudio(
   settings: AISettings,
@@ -280,23 +346,30 @@ export async function transcribeAudio(
     };
   }
 
-  // Auto detect provider if mismatched
   const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
   const langCode = language.startsWith('id') ? 'id' : 'en';
 
-  // Adaptive natural Indonesian primer (balances casual speech, business/office terms, ERP, procurement, and tech jargon automatically without extra user input)
-  const ADAPTIVE_INDONESIAN_PRIMER =
-    'Transkrip percakapan bahasa Indonesia alami, rapat kerja, pengadaan barang, sistem ERP, proyek, dan bisnis. Sangat akurat menangkap kosakata lisan sehari-hari (enggak, gak, gimana, kayak, sih, nah, cuman, gitu, iya), istilah kantor & proyek (AJG, EPC, RKM, PB, PR, RFQ, PO, ETA, PIC, SOP, PPN, beban, biaya, vendor, partially approve), istilah teknologi (backend, database, API), dan tanda baca lengkap.';
+  // Whisper decoder conditioning prompt: written as natural preceding sentences (NOT meta-instructions)
+  // so Whisper adopts Indonesian punctuation, conversational particles, and enterprise/technical terms seamlessly.
+  const NATURAL_DOMAIN_PRIMER =
+    'Baik, untuk rapat proyek, pengadaan, ERP, evaluasi teknis vendor, Internal Project, RFQ, PO, PR, PB, ETA, PIC, SOP, PPN, EPC RKM, AJG, database, backend, dan API, gimana progresnya dari sisi Pak Ami?';
 
-  const contextTail = contextPrompt && contextPrompt.trim() ? ` Konteks sebelumnya: ${contextPrompt.slice(-200)}` : '';
-  const finalPrompt = `${ADAPTIVE_INDONESIAN_PRIMER}${contextTail}`.slice(-440);
+  const cleanTail = contextPrompt ? contextPrompt.trim().replace(/\s+/g, ' ').slice(-220) : '';
+  const finalPrompt = cleanTail ? `${NATURAL_DOMAIN_PRIMER} ${cleanTail}` : NATURAL_DOMAIN_PRIMER;
 
-  const fileName = (audioBlob as any).name || 
-    (audioBlob.type?.includes('mp3') ? 'audio.mp3' :
-     audioBlob.type?.includes('wav') ? 'audio.wav' :
-     audioBlob.type?.includes('m4a') ? 'audio.m4a' :
-     audioBlob.type?.includes('ogg') ? 'audio.ogg' :
-     audioBlob.type?.includes('mp4') ? 'audio.mp4' : 'audio.webm');
+  const fileName =
+    (audioBlob as any).name ||
+    (audioBlob.type?.includes('mp3')
+      ? 'audio.mp3'
+      : audioBlob.type?.includes('wav')
+        ? 'audio.wav'
+        : audioBlob.type?.includes('m4a')
+          ? 'audio.m4a'
+          : audioBlob.type?.includes('ogg')
+            ? 'audio.ogg'
+            : audioBlob.type?.includes('mp4')
+              ? 'audio.mp4'
+              : 'audio.webm');
 
   try {
     if (provider === 'groq') {
@@ -349,7 +422,7 @@ export async function transcribeAudio(
     } else if (provider === 'gemini') {
       const base64Audio = await blobToBase64(audioBlob);
       const mime = audioBlob.type || 'audio/webm';
-      const text = await callGeminiAudio(settings.apiKey.trim(), base64Audio, mime);
+      const text = await callGeminiAudio(settings.apiKey.trim(), base64Audio, mime, cleanTail);
       return { success: true, result: formatIntoSentenceLines(text || '') };
     }
 
@@ -387,25 +460,24 @@ export async function executeAITask(
     };
   }
 
-  // Auto detect provider if mismatched
   const provider = detectProviderFromKey(settings.apiKey) || settings.provider;
 
   let promptInstruction = '';
   if (taskType === 'speakers') {
     promptInstruction = `Kamu adalah asisten analisis transkrip percakapan tingkat tinggi. Tugasmu adalah menganalisis transkrip percakapan berikut dan memisahkan setiap giliran bicara pembicara (Speaker Diarization):
 1. Deteksi pergantian orang yang berbicara (dialog tanya-jawab, tanggapan singkat seperti 'Oh oke', 'Heeh itu...', atau peralihan topik).
-2. Deteksi nama pembicara jika ada nama orang yang dipanggil atau disebutkan dalam konteks percakapan (misalnya 'Pak Bagus', 'Bu Ayu', 'Mas Arya', dll).
+2. Deteksi nama pembicara jika ada nama orang yang dipanggil atau disebutkan dalam konteks percakapan (misalnya 'Pak Ami', 'Pak Bagus', 'Bu Ayu', 'Mas Arya', dll).
 3. Jika nama orang belum bisa dipastikan 100%, gunakan label pembicara yang konsisten seperti:
    **[Pembicara A]** dan **[Pembicara B]** (atau Pembicara 1, Pembicara 2).
 4. Tuliskan setiap giliran bicara di baris baru terpisah dengan format:
    **[Nama Pembicara]:** Kalimat yang diucapkan...
-5. Perbaiki tanda baca agar kalimatnya rapi dan enak dibaca.
+5. Perbaiki tanda baca dan istilah yang salah dengar secara kontekstual tanpa mengubah makna asli kalimat.
 6. JANGAN tambahkan penjelasan atau kata pengantar apapun, langsung keluarkan hasil dialog yang sudah dipisah.`;
   } else if (taskType === 'polish') {
-    promptInstruction = `Kamu adalah asisten editor transkrip profesional. Tugasmu adalah merapikan transkrip suara lisan berikut:
-1. Tambahkan tanda baca yang tepat (titik, koma, tanda tanya, huruf kapital).
-2. Perbaiki kesalahan pengetikan lisan (typo / slip of tongue, seperti 'rewok' menjadi 'rework') dengan memahami konteks percakapan secara cerdas.
-3. Pisahkan menjadi paragraf-paragraf yang rapi dan mudah dibaca.
+    promptInstruction = `Kamu adalah asisten editor transkrip rapat profesional. Tugasmu adalah merapikan transkrip suara lisan berikut:
+1. Pertahankan kelengkapan kalimat 1:1 sesuai yang diucapkan pembicara (jangan meringkas atau membuang kalimat).
+2. Perbaiki kata/istilah yang salah dengar oleh mesin pengenal suara berdasarkan konteks kalimat (misal homofon istilah proyek, singkatan seperti RFQ, ETA, EPC, RKM, PO, PR, nama orang, atau istilah teknis).
+3. Tambahkan tanda baca yang akurat (titik, koma, tanda tanya, huruf kapital) dan pisahkan per kalimat/baris dialog dengan rapi.
 4. JANGAN tambahkan penjelasan atau kata pengantar apapun, langsung keluarkan hasil transkrip yang sudah rapi.`;
   } else if (taskType === 'summarize') {
     promptInstruction = `Kamu adalah asisten notulensi profesional. Berikan ringkasan eksekutif yang terstruktur dan padat dari transkrip berikut:
@@ -414,7 +486,7 @@ export async function executeAITask(
 3. Gunakan Bahasa Indonesia yang jelas, profesional, dan to-the-point.`;
   } else if (taskType === 'actions') {
     promptInstruction = `Kamu adalah asisten manajemen proyek. Dari transkrip berikut, ekstrak seluruh:
-1. Daftar Tugas / Action Items yang harus dikerjakan (sertakan penanggung jawab jika disebutkan).
+1. Daftar Tugas / Action Items yang harus dikerjakan (sertakan penanggung jawab/PIC jika disebutkan).
 2. Keputusan penting (Key Decisions) yang disepakati.
 3. Gunakan format checklist yang rapi (misal: - [ ] Tugas...). Jika tidak ada tugas eksplisit, tuliskan simpulan tindak lanjut logis.`;
   }
@@ -428,10 +500,9 @@ export async function executeAITask(
       resultText = await callGemini(settings.apiKey.trim(), fullPrompt, model);
     } else if (provider === 'groq') {
       const candidates = [
-        settings.customModel || 'llama-3.1-8b-instant',
-        'llama-3.1-8b-instant',
-        'llama-3.1-70b-versatile',
         'llama-3.3-70b-versatile',
+        settings.customModel || 'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
         'mixtral-8x7b-32768',
       ];
       const uniqueCandidates = Array.from(new Set(candidates.filter(Boolean)));
@@ -442,7 +513,7 @@ export async function executeAITask(
             'https://api.groq.com/openai/v1/chat/completions',
             settings.apiKey.trim(),
             m,
-            'Kamu adalah asisten cerdas pemrosesan transkrip dialog.',
+            'Kamu adalah asisten cerdas pemrosesan transkrip dialog Bahasa Indonesia.',
             fullPrompt
           );
           if (resultText) break;
@@ -451,7 +522,8 @@ export async function executeAITask(
           if (
             e.message?.includes('does not exist') ||
             e.message?.includes('model_not_found') ||
-            e.message?.includes('404')
+            e.message?.includes('404') ||
+            e.message?.includes('whisper')
           ) {
             continue;
           }
@@ -460,12 +532,15 @@ export async function executeAITask(
       }
       if (!resultText) throw new Error(groqErr || 'Gagal memproses dengan model Groq.');
     } else if (provider === 'openai') {
-      const model = settings.customModel || 'gpt-4o-mini';
+      const model =
+        settings.customModel && !settings.customModel.includes('whisper')
+          ? settings.customModel
+          : 'gpt-4o-mini';
       resultText = await callOpenAICompatible(
         'https://api.openai.com/v1/chat/completions',
         settings.apiKey.trim(),
         model,
-        'Kamu adalah asisten cerdas pemrosesan transkrip dialog.',
+        'Kamu adalah asisten cerdas pemrosesan transkrip dialog Bahasa Indonesia.',
         fullPrompt
       );
     }
