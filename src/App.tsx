@@ -2,9 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, getSetting, type TranscriptRecord, type TranscriptLineTiming } from './db';
 import { SpeechService, type SpeechState } from './services/speechRecognition';
+import { DeepgramStreamingService } from './services/deepgramStream';
 import { AudioRecorderService } from './services/audioRecorder';
 import { splitAudioFileForWhisper } from './services/audioChunker';
-import { transcribeAudio, type AISettings } from './services/aiService';
+import { transcribeAudio, detectProviderFromKey, type AISettings } from './services/aiService';
 import { Sidebar } from './components/Sidebar';
 import { RecordingControls, type TranscriptionEngine } from './components/RecordingControls';
 import { TranscriptEditor } from './components/TranscriptEditor';
@@ -98,16 +99,15 @@ export function App() {
   const [isSupported, setIsSupported] = useState(true);
   const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const [uploadStatusMessage, setUploadStatusMessage] = useState('');
-  const [activeWhisperChunks, setActiveWhisperChunks] = useState(0);
-  const isTranscribingWhisper = isUploadingAudio || activeWhisperChunks > 0;
+  const isTranscribingWhisper = isUploadingAudio;
 
   // Service References
   const speechServiceRef = useRef<SpeechService | null>(null);
+  const deepgramServiceRef = useRef<DeepgramStreamingService | null>(null);
   const audioRecorderRef = useRef<AudioRecorderService | null>(null);
+  const activeLiveModeRef = useRef<'deepgram' | 'browser'>('browser');
 
-  // Hybrid Live + Whisper & Audio Timing coordination refs
-  const currentChunkProvisionalLinesRef = useRef<string[]>([]);
-  const whisperQueueRef = useRef<Promise<void>>(Promise.resolve());
+  // Audio Timing & Refs
   const audioBlobRef = useRef<Blob | null>(null);
   audioBlobRef.current = audioBlob;
   const lineTimingsRef = useRef<TranscriptLineTiming[]>([]);
@@ -195,301 +195,172 @@ export function App() {
   );
 
   /**
-   * Commits an utterance into the transcript with multi-stage deduplication & timestamp tracking.
+   * Commits an utterance into the transcript with deduplication & exact timestamp tracking.
    */
-  const commitUtterance = useCallback((text: string, replaceLastLine: boolean = false) => {
-    const cleaned = cleanSpeechTerms(text);
-    const trimmed = cleaned.trim();
-    if (!trimmed) return;
+  const commitUtterance = useCallback(
+    (
+      text: string,
+      replaceLastLine: boolean = false,
+      explicitStartSec?: number,
+      explicitEndSec?: number
+    ) => {
+      const cleaned = cleanSpeechTerms(text);
+      const trimmed = cleaned.trim();
+      if (!trimmed) return;
 
-    const nowElapsed =
-      audioRecorderRef.current?.getElapsedSeconds() || durationSecondsRef.current;
-    const uttStartSec =
-      currentUtteranceStartSecRef.current !== null
-        ? currentUtteranceStartSecRef.current
-        : Math.max(0, Number((nowElapsed - 1.8).toFixed(1)));
-    const uttEndSec = Math.max(uttStartSec + 0.6, Number(nowElapsed.toFixed(1)));
+      const nowElapsed =
+        audioRecorderRef.current?.getElapsedSeconds() || durationSecondsRef.current;
+      const uttStartSec =
+        explicitStartSec !== undefined
+          ? explicitStartSec
+          : currentUtteranceStartSecRef.current !== null
+            ? currentUtteranceStartSecRef.current
+            : Math.max(0, Number((nowElapsed - 1.5).toFixed(1)));
+      const uttEndSec =
+        explicitEndSec !== undefined
+          ? explicitEndSec
+          : Math.max(uttStartSec + 0.6, Number(nowElapsed.toFixed(1)));
 
-    if (!replaceLastLine) {
-      currentUtteranceStartSecRef.current = null;
-    }
-
-    // Track provisional lines spoken during the current audio chunk so Whisper can upgrade them accurately
-    const provList = currentChunkProvisionalLinesRef.current;
-    if (replaceLastLine && provList.length > 0) {
-      provList[provList.length - 1] = trimmed;
-    } else if (provList.length > 0) {
-      const lastProv = provList[provList.length - 1];
-      const normLastProv = lastProv.replace(/[.,?!]+$/, '').trim().toLowerCase();
-      const normNewProv = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
-      if (
-        normNewProv === normLastProv ||
-        normNewProv.startsWith(normLastProv) ||
-        computeWordOverlap(normLastProv, normNewProv) >= 0.75
-      ) {
-        provList[provList.length - 1] = trimmed;
-      } else {
-        provList.push(trimmed);
-      }
-    } else {
-      provList.push(trimmed);
-    }
-
-    const updateLastTiming = (newText: string) => {
-      const nextTimings = [...lineTimingsRef.current];
-      if (nextTimings.length > 0) {
-        nextTimings[nextTimings.length - 1] = {
-          ...nextTimings[nextTimings.length - 1],
-          text: newText,
-          endTime: uttEndSec,
-        };
-      } else {
-        nextTimings.push({ text: newText, startTime: uttStartSec, endTime: uttEndSec });
-      }
-      lineTimingsRef.current = nextTimings;
-      setLineTimings(nextTimings);
-    };
-
-    const appendNewTiming = (newText: string) => {
-      const nextTimings = [
-        ...lineTimingsRef.current,
-        { text: newText, startTime: uttStartSec, endTime: uttEndSec },
-      ];
-      lineTimingsRef.current = nextTimings;
-      setLineTimings(nextTimings);
-    };
-
-    setContent((prev) => {
-      if (!prev) {
-        appendNewTiming(trimmed);
-        contentRef.current = trimmed;
-        return trimmed;
+      if (!replaceLastLine) {
+        currentUtteranceStartSecRef.current = null;
       }
 
-      const lines = prev.split('\n');
-      let lastNonEmptyIndex = lines.length - 1;
-      while (lastNonEmptyIndex >= 0 && !lines[lastNonEmptyIndex].trim()) {
-        lastNonEmptyIndex--;
-      }
+      const updateLastTiming = (newText: string) => {
+        const nextTimings = [...lineTimingsRef.current];
+        if (nextTimings.length > 0) {
+          nextTimings[nextTimings.length - 1] = {
+            ...nextTimings[nextTimings.length - 1],
+            text: newText,
+            endTime: uttEndSec,
+          };
+        } else {
+          nextTimings.push({ text: newText, startTime: uttStartSec, endTime: uttEndSec });
+        }
+        lineTimingsRef.current = nextTimings;
+        setLineTimings(nextTimings);
+      };
 
-      if (lastNonEmptyIndex >= 0) {
-        const lastLine = lines[lastNonEmptyIndex].trim();
-        const normLast = lastLine.replace(/[.,?!]+$/, '').trim().toLowerCase();
-        const normTrimmed = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
+      const appendNewTiming = (newText: string) => {
+        const nextTimings = [
+          ...lineTimingsRef.current,
+          { text: newText, startTime: uttStartSec, endTime: uttEndSec },
+        ];
+        lineTimingsRef.current = nextTimings;
+        setLineTimings(nextTimings);
+      };
 
-        // Case 0: Explicit replacement of the same Web Speech resultIndex
-        if (replaceLastLine) {
-          lines[lastNonEmptyIndex] = trimmed;
-          updateLastTiming(trimmed);
-          const updated = lines.join('\n');
-          contentRef.current = updated;
-          return updated;
+      setContent((prev) => {
+        if (!prev) {
+          appendNewTiming(trimmed);
+          contentRef.current = trimmed;
+          return trimmed;
         }
 
-        // Case 1: Exact duplicate -> ignore
-        if (normLast === normTrimmed) {
-          return prev;
+        const lines = prev.split('\n');
+        let lastNonEmptyIndex = lines.length - 1;
+        while (lastNonEmptyIndex >= 0 && !lines[lastNonEmptyIndex].trim()) {
+          lastNonEmptyIndex--;
         }
 
-        // Case 2: New text is an extended continuation of the last line -> update in-place
-        if (
-          normTrimmed.startsWith(normLast + ' ') ||
-          (normLast.length > 3 && normTrimmed.startsWith(normLast))
-        ) {
-          lines[lastNonEmptyIndex] = trimmed;
-          updateLastTiming(trimmed);
-          const updated = lines.join('\n');
-          contentRef.current = updated;
-          return updated;
-        }
+        if (lastNonEmptyIndex >= 0) {
+          const lastLine = lines[lastNonEmptyIndex].trim();
+          const normLast = lastLine.replace(/[.,?!]+$/, '').trim().toLowerCase();
+          const normTrimmed = trimmed.replace(/[.,?!]+$/, '').trim().toLowerCase();
 
-        // Case 3: The last line already includes this new text completely -> ignore
-        if (normLast.startsWith(normTrimmed + ' ') || normLast === normTrimmed) {
-          return prev;
-        }
-
-        // Case 4: High word-overlap revision of the same utterance -> replace in-place if longer/more complete
-        if (
-          normLast.split(/\s+/).length >= 3 &&
-          computeWordOverlap(normLast, normTrimmed) >= 0.78
-        ) {
-          if (trimmed.length >= lastLine.length - 3) {
+          // Case 0: Explicit replacement of the same Web Speech resultIndex
+          if (replaceLastLine) {
             lines[lastNonEmptyIndex] = trimmed;
             updateLastTiming(trimmed);
             const updated = lines.join('\n');
             contentRef.current = updated;
             return updated;
           }
-          return prev;
-        }
-      }
 
-      // Case 5: Brand new utterance -> append on new line
-      appendNewTiming(trimmed);
-      const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-      const updated = prev + separator + trimmed;
-      contentRef.current = updated;
-      return updated;
-    });
-  }, []);
-
-  /**
-   * Processes a live audio chunk with Whisper AI in the background and upgrades
-   * the provisional browser lines + their exact timestamps.
-   */
-  const handleLiveAudioChunk = useCallback(
-    (chunkBlob: Blob, chunkStartSec: number, chunkEndSec: number) => {
-      const provisionalSnapshot = [...currentChunkProvisionalLinesRef.current];
-      currentChunkProvisionalLinesRef.current = [];
-
-      whisperQueueRef.current = whisperQueueRef.current.then(async () => {
-        const settings = await getSetting<AISettings>('ai_settings', {
-          provider: 'groq',
-          apiKey: '',
-        });
-
-        if (!settings.apiKey || !settings.apiKey.trim()) {
-          return;
-        }
-
-        setActiveWhisperChunks((c) => c + 1);
-        try {
-          const currentText = contentRef.current || '';
-          const res = await transcribeAudio(settings, chunkBlob, language, currentText.slice(-260));
-          if (!res.success || !res.result || !res.result.trim()) {
-            return;
+          // Case 1: Exact duplicate -> ignore
+          if (normLast === normTrimmed) {
+            return prev;
           }
 
-          const whisperCleaned = cleanSpeechTerms(res.result.trim());
-          if (!whisperCleaned) return;
-
-          const whisperLines = whisperCleaned
-            .split('\n')
-            .map((l) => l.trim())
-            .filter(Boolean);
-
-          const chunkSpan = Math.max(0.8, chunkEndSec - chunkStartSec);
-          const newChunkTimings: TranscriptLineTiming[] = whisperLines.map((wLine, idx) => {
-            const seg = res.segments?.[idx];
-            const sTime = seg
-              ? Number((chunkStartSec + seg.startTime).toFixed(1))
-              : Number((chunkStartSec + (chunkSpan * idx) / whisperLines.length).toFixed(1));
-            const eTime = seg
-              ? Number((chunkStartSec + seg.endTime).toFixed(1))
-              : Number((chunkStartSec + (chunkSpan * (idx + 1)) / whisperLines.length).toFixed(1));
-            return {
-              text: wLine,
-              startTime: sTime,
-              endTime: Math.max(sTime + 0.5, eTime),
-            };
-          });
-
-          setContent((prev) => {
-            if (!prev) {
-              lineTimingsRef.current = newChunkTimings;
-              setLineTimings(newChunkTimings);
-              contentRef.current = whisperCleaned;
-              return whisperCleaned;
-            }
-
-            const lines = prev.split('\n').filter((l) => l.trim().length > 0);
-
-            // 1. Match provisional browser lines from this chunk window and replace them + their timings in-place
-            if (provisionalSnapshot.length > 0) {
-              const firstProv = provisionalSnapshot[0].trim().toLowerCase();
-              let matchStart = -1;
-              for (let i = lines.length - 1; i >= Math.max(0, lines.length - 8); i--) {
-                const normLine = lines[i].trim().toLowerCase();
-                if (
-                  normLine === firstProv ||
-                  computeWordOverlap(normLine, firstProv) >= 0.45
-                ) {
-                  matchStart = i;
-                  break;
-                }
-              }
-
-              if (matchStart !== -1) {
-                const removeCount = Math.min(
-                  provisionalSnapshot.length,
-                  lines.length - matchStart
-                );
-                lines.splice(matchStart, removeCount, ...whisperLines);
-
-                const nextTimings = [...lineTimingsRef.current];
-                if (matchStart <= nextTimings.length) {
-                  nextTimings.splice(matchStart, removeCount, ...newChunkTimings);
-                } else {
-                  nextTimings.push(...newChunkTimings);
-                }
-                lineTimingsRef.current = nextTimings;
-                setLineTimings(nextTimings);
-
-                const updated = lines.join('\n');
-                contentRef.current = updated;
-                return updated;
-              }
-            }
-
-            // 2. Fallback: Check if the last line of content matches the Whisper output
-            if (lines.length > 0) {
-              const lastLine = lines[lines.length - 1];
-              if (computeWordOverlap(lastLine, whisperCleaned) >= 0.4) {
-                lines.splice(lines.length - 1, 1, ...whisperLines);
-                const nextTimings = [...lineTimingsRef.current];
-                if (nextTimings.length > 0) {
-                  nextTimings.splice(nextTimings.length - 1, 1, ...newChunkTimings);
-                } else {
-                  nextTimings.push(...newChunkTimings);
-                }
-                lineTimingsRef.current = nextTimings;
-                setLineTimings(nextTimings);
-
-                const updated = lines.join('\n');
-                contentRef.current = updated;
-                return updated;
-              }
-            }
-
-            // 3. Brand new speech caught by Whisper that Web Speech API missed completely
-            const nextTimings = [...lineTimingsRef.current, ...newChunkTimings];
-            lineTimingsRef.current = nextTimings;
-            setLineTimings(nextTimings);
-
-            const separator = prev && !prev.endsWith('\n') ? '\n' : '';
-            const updated = prev + separator + whisperCleaned;
+          // Case 2: Extended continuation of last line -> update in-place
+          if (
+            normTrimmed.startsWith(normLast + ' ') ||
+            (normLast.length > 3 && normTrimmed.startsWith(normLast))
+          ) {
+            lines[lastNonEmptyIndex] = trimmed;
+            updateLastTiming(trimmed);
+            const updated = lines.join('\n');
             contentRef.current = updated;
             return updated;
-          });
-        } catch (err) {
-          console.warn('Live Whisper chunk error (keeping provisional text):', err);
-        } finally {
-          setActiveWhisperChunks((c) => Math.max(0, c - 1));
+          }
+
+          // Case 3: Last line already includes this new text completely -> ignore
+          if (normLast.startsWith(normTrimmed + ' ') || normLast === normTrimmed) {
+            return prev;
+          }
+
+          // Case 4: High word-overlap revision -> replace in-place if longer
+          if (
+            normLast.split(/\s+/).length >= 3 &&
+            computeWordOverlap(normLast, normTrimmed) >= 0.78
+          ) {
+            if (trimmed.length >= lastLine.length - 3) {
+              lines[lastNonEmptyIndex] = trimmed;
+              updateLastTiming(trimmed);
+              const updated = lines.join('\n');
+              contentRef.current = updated;
+              return updated;
+            }
+            return prev;
+          }
         }
+
+        // Case 5: Brand new utterance -> append on new line
+        appendNewTiming(trimmed);
+        const separator = prev && !prev.endsWith('\n') ? '\n' : '';
+        const updated = prev + separator + trimmed;
+        contentRef.current = updated;
+        return updated;
       });
     },
-    [language]
+    []
   );
 
-  // Initialize Speech Services & Audio Recorder
+  // Initialize Lightweight Audio Recorder (Single Master Recorder, Zero Slicing Overhead)
   useEffect(() => {
     setIsSupported(SpeechService.isSupported());
-    audioRecorderRef.current = new AudioRecorderService({
-      enableVAD: true,
-      silenceThresholdMs: 950,
-      minChunkDurationMs: 3200,
-      maxChunkDurationMs: 9000,
-      hardLimitDurationMs: 14000,
-    });
+    audioRecorderRef.current = new AudioRecorderService();
     setEngine('whisper');
   }, []);
 
-  // Bind latest live chunk handler to AudioRecorderService
+  // Initialize Deepgram Real-Time WebSocket Streaming Service
   useEffect(() => {
-    audioRecorderRef.current?.setOnChunkReady(handleLiveAudioChunk);
-  }, [handleLiveAudioChunk]);
+    deepgramServiceRef.current = new DeepgramStreamingService({
+      onFinalTranscript: (text, startSec, endSec) => {
+        interimSpeechRef.current = '';
+        setInterimContent('');
+        commitUtterance(text, false, startSec, endSec);
+      },
+      onInterimTranscript: (text) => {
+        const cleaned = cleanSpeechTerms(text);
+        setInterimContent(cleaned);
+        interimSpeechRef.current = cleaned;
+      },
+      onStateChange: (state) => {
+        if (activeLiveModeRef.current === 'deepgram') {
+          setSpeechState(state);
+        }
+      },
+      onError: (errMsg) => {
+        console.warn('Deepgram stream error:', errMsg);
+      },
+    });
 
-  // Speech Recognition for 0ms live visual feedback
+    return () => {
+      deepgramServiceRef.current?.stop();
+    };
+  }, [commitUtterance]);
+
+  // Initialize Lightweight Browser Speech Recognition (Instant fallback when not using Deepgram)
   useEffect(() => {
     speechServiceRef.current = new SpeechService(
       {
@@ -515,7 +386,9 @@ export function App() {
           interimSpeechRef.current = cleaned;
         },
         onStateChange: (state) => {
-          setSpeechState(state);
+          if (activeLiveModeRef.current === 'browser') {
+            setSpeechState(state);
+          }
         },
         onError: (errMsg) => {
           console.warn('Speech error:', errMsg);
@@ -527,7 +400,7 @@ export function App() {
     return () => {
       speechServiceRef.current?.stop();
     };
-  }, [engine, language, commitUtterance]);
+  }, [language, commitUtterance]);
 
   const [audioLevel, setAudioLevel] = useState(0);
 
@@ -546,7 +419,7 @@ export function App() {
           const level = audioRecorderRef.current.getAudioLevel();
           setAudioLevel(level);
         }
-      }, 60);
+      }, 80);
     } else {
       setAudioLevel(0);
       if (interval) clearInterval(interval);
@@ -571,56 +444,72 @@ export function App() {
   }, [content, title, durationSeconds, persistTranscript]);
 
   const handleEngineChange = async (newEngine: TranscriptionEngine) => {
-    if (newEngine === 'whisper') {
-      const settings = await getSetting<AISettings>('ai_settings', {
-        provider: 'groq',
-        apiKey: '',
-      });
-      if (!settings.apiKey) {
-        setIsSettingsOpen(true);
-        alert(
-          'Mode Whisper AI membutuhkan API Key (Groq / OpenAI / Gemini). Silakan simpan API Key Anda di menu Pengaturan.'
-        );
-        return;
-      }
-    }
     setEngine(newEngine);
   };
 
-  // Controls Handlers
+  // Controls Handlers (Zero Audio Slicing Lag!)
   const handleStart = async () => {
-    currentChunkProvisionalLinesRef.current = [];
     currentUtteranceStartSecRef.current = null;
     setAudioBlob(null);
     audioBlobRef.current = null;
 
-    // 1. Ensure live recognition always starts immediately so user can talk without lag
+    const settings = await getSetting<AISettings>('ai_settings', {
+      provider: 'groq',
+      apiKey: '',
+    });
+    const effectiveProvider = detectProviderFromKey(settings.apiKey || '') || settings.provider;
+
+    // Mode 1: Deepgram True Real-Time WebSocket Streaming (~250ms, Zoom-level)
+    if (effectiveProvider === 'deepgram' && settings.apiKey?.trim()) {
+      try {
+        const stream = await audioRecorderRef.current?.start();
+        if (stream && deepgramServiceRef.current) {
+          activeLiveModeRef.current = 'deepgram';
+          const connected = await deepgramServiceRef.current.start(
+            settings.apiKey.trim(),
+            stream,
+            language
+          );
+          if (connected) {
+            return;
+          }
+          // Fallback to lightweight browser recognition if WebSocket failed
+          console.warn('Deepgram WebSocket failed, falling back to lightweight live mode.');
+        }
+      } catch (err) {
+        console.warn('Deepgram start error, falling back:', err);
+      }
+    }
+
+    // Mode 2: Ultra-Lightweight Live Speech + Single Background Master Recorder (Zero slicing lag!)
+    activeLiveModeRef.current = 'browser';
     speechServiceRef.current?.setLanguage(language);
     speechServiceRef.current?.start();
 
-    // 2. Start hardware audio recorder + VAD in parallel for Whisper AI verification & master recording
-    if (engine === 'whisper') {
-      try {
-        await audioRecorderRef.current?.start();
-      } catch (err: any) {
-        console.warn('AudioRecorder start warning:', err);
-      }
+    try {
+      await audioRecorderRef.current?.start();
+    } catch (err: any) {
+      console.warn('AudioRecorder start warning:', err);
     }
   };
 
   const handlePause = async () => {
-    speechServiceRef.current?.pause();
-    if (engine === 'whisper' && audioRecorderRef.current) {
-      await audioRecorderRef.current.pause();
+    if (activeLiveModeRef.current === 'deepgram') {
+      deepgramServiceRef.current?.pause();
+    } else {
+      speechServiceRef.current?.pause();
     }
+    await audioRecorderRef.current?.pause();
     await persistTranscript();
   };
 
   const handleResume = () => {
-    speechServiceRef.current?.resume();
-    if (engine === 'whisper') {
-      audioRecorderRef.current?.resume();
+    if (activeLiveModeRef.current === 'deepgram') {
+      deepgramServiceRef.current?.resume();
+    } else {
+      speechServiceRef.current?.resume();
     }
+    audioRecorderRef.current?.resume();
   };
 
   const handleStop = async () => {
@@ -630,18 +519,20 @@ export function App() {
       commitUtterance(remainingSpeech);
     }
 
-    speechServiceRef.current?.stop();
+    if (activeLiveModeRef.current === 'deepgram') {
+      deepgramServiceRef.current?.stop();
+    } else {
+      speechServiceRef.current?.stop();
+    }
     setInterimContent('');
 
-    if (engine === 'whisper' && audioRecorderRef.current) {
+    if (audioRecorderRef.current) {
       try {
         const finalMasterBlob = await audioRecorderRef.current.stop();
         if (finalMasterBlob) {
           audioBlobRef.current = finalMasterBlob;
           setAudioBlob(finalMasterBlob);
         }
-        // Wait for any in-flight Whisper chunk to finish before final persist
-        await whisperQueueRef.current;
         await persistTranscript({
           audioBlob: finalMasterBlob || audioBlobRef.current || undefined,
         });
@@ -661,7 +552,7 @@ export function App() {
 
   /**
    * Upload Audio File Transcription Handler with Automatic 16kHz Mono Chunking
-   * Also stores the uploaded audio file and sentence timestamps for interactive synced playback.
+   * Works with Deepgram, Groq Whisper, OpenAI Whisper, and Gemini Audio.
    */
   const handleUploadAudio = async (file: File) => {
     const settings = await getSetting<AISettings>('ai_settings', {
@@ -671,7 +562,7 @@ export function App() {
     if (!settings.apiKey || !settings.apiKey.trim()) {
       setIsSettingsOpen(true);
       alert(
-        'Untuk mentranskripsi file rekaman audio, dibutuhkan API Key Whisper AI (Groq / OpenAI / Gemini). Silakan masukkan API Key Anda di Pengaturan.'
+        'Untuk mentranskripsi file rekaman audio, dibutuhkan API Key (Deepgram / Groq / OpenAI / Gemini). Silakan masukkan API Key Anda di Pengaturan.'
       );
       return;
     }
@@ -694,7 +585,6 @@ export function App() {
         setDurationSeconds(decodedDuration);
       }
 
-      // Attach uploaded audio file for synced playback immediately
       audioBlobRef.current = file;
       setAudioBlob(file);
       lineTimingsRef.current = [];
@@ -712,7 +602,7 @@ export function App() {
           );
         } else {
           setUploadStatusMessage(
-            `Mentranskripsi "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB) dengan Whisper AI...`
+            `Mentranskripsi "${file.name}" (${(file.size / (1024 * 1024)).toFixed(1)} MB)...`
           );
         }
 
@@ -805,13 +695,11 @@ export function App() {
       await persistTranscript();
     }
     if (speechState !== 'idle') {
+      deepgramServiceRef.current?.stop();
       speechServiceRef.current?.stop();
-      if (engine === 'whisper') {
-        audioRecorderRef.current?.stop();
-      }
+      audioRecorderRef.current?.stop();
     }
 
-    currentChunkProvisionalLinesRef.current = [];
     currentUtteranceStartSecRef.current = null;
     setActiveId(null);
     setTitle('Transkrip Baru');
@@ -828,12 +716,10 @@ export function App() {
 
   const handleSelectTranscript = (id: number) => {
     if (speechState !== 'idle') {
+      deepgramServiceRef.current?.stop();
       speechServiceRef.current?.stop();
-      if (engine === 'whisper') {
-        audioRecorderRef.current?.stop();
-      }
+      audioRecorderRef.current?.stop();
     }
-    currentChunkProvisionalLinesRef.current = [];
     currentUtteranceStartSecRef.current = null;
     const target = transcripts.find((t) => t.id === id);
     if (target) {
@@ -924,12 +810,12 @@ export function App() {
               </span>
             </div>
             <span className="text-[11px] bg-white/20 px-2.5 py-1 rounded-lg font-mono uppercase font-bold shrink-0">
-              Whisper AI
+              AI Transkrip
             </span>
           </div>
         )}
 
-        {/* 1. Recording Controls Bar with Engine Toggle & Audio Upload */}
+        {/* 1. Recording Controls Bar */}
         <RecordingControls
           speechState={speechState}
           durationSeconds={durationSeconds}

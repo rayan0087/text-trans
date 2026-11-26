@@ -1,4 +1,4 @@
-export type AIProvider = 'gemini' | 'groq' | 'openai';
+export type AIProvider = 'deepgram' | 'gemini' | 'groq' | 'openai';
 
 export interface AISettings {
   provider: AIProvider;
@@ -20,6 +20,9 @@ export interface AIResponse {
 }
 
 export const DEFAULT_MODELS: Record<AIProvider, string[]> = {
+  deepgram: [
+    'nova-2',
+  ],
   groq: [
     'llama-3.3-70b-versatile',
     'llama-3.1-8b-instant',
@@ -94,6 +97,7 @@ export function detectProviderFromKey(apiKey: string): AIProvider | null {
   if (trimmed.startsWith('gsk_')) return 'groq';
   if (trimmed.startsWith('AIzaSy')) return 'gemini';
   if (trimmed.startsWith('sk-') && !trimmed.startsWith('gsk_')) return 'openai';
+  if (/^[a-f0-9]{40}$/i.test(trimmed)) return 'deepgram';
   return null;
 }
 
@@ -481,6 +485,51 @@ export async function transcribeAudio(
         parsedSegments.length > 0
           ? parsedSegments.map((s) => s.text).join('\n')
           : formatIntoSentenceLines(data.text?.trim() || '');
+
+      return {
+        success: true,
+        result: finalResult,
+        segments: parsedSegments.length > 0 ? parsedSegments : undefined,
+      };
+    } else if (provider === 'deepgram') {
+      const dgUrl = `https://api.deepgram.com/v1/listen?model=nova-2&language=${langCode}&smart_format=true&punctuate=true&diarize=true&utterances=true`;
+      const response = await fetch(dgUrl, {
+        method: 'POST',
+        headers: {
+          Authorization: `Token ${settings.apiKey.trim()}`,
+          'Content-Type': audioBlob.type || 'audio/webm',
+        },
+        body: audioBlob,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.err_msg || errorData.message || `Deepgram error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const parsedSegments: WhisperSegmentTiming[] = [];
+      const utterances = data.results?.utterances;
+      if (Array.isArray(utterances) && utterances.length > 0) {
+        for (const utt of utterances) {
+          const text = (utt.transcript || '').trim();
+          if (!text) continue;
+          const speakerPrefix =
+            typeof utt.speaker === 'number' ? `[Pembicara ${utt.speaker + 1}]: ` : '';
+          parsedSegments.push({
+            text: `${speakerPrefix}${text}`,
+            startTime: Number((utt.start || 0).toFixed(1)),
+            endTime: Number((utt.end || (utt.start || 0) + 1.5).toFixed(1)),
+          });
+        }
+      }
+
+      const fallbackText =
+        data.results?.channels?.[0]?.alternatives?.[0]?.transcript?.trim() || '';
+      const finalResult =
+        parsedSegments.length > 0
+          ? parsedSegments.map((s) => s.text).join('\n')
+          : formatIntoSentenceLines(fallbackText);
 
       return {
         success: true,

@@ -69,6 +69,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   const getProviderInfo = () => {
     switch (provider) {
+      case 'deepgram':
+        return {
+          name: 'Deepgram Nova-2',
+          badge: 'Real-Time WebSocket (Setara Zoom)',
+          link: 'https://console.deepgram.com/',
+          linkText: 'Dapatkan API Key Deepgram ($200 Kredit Gratis)',
+          placeholder: '40-karakter hex key Deepgram...',
+          defaultModel: 'nova-2',
+        };
       case 'gemini':
         return {
           name: 'Google Gemini',
@@ -173,8 +182,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
               Penyedia AI Aktif
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {[
+                { id: 'deepgram', label: 'Deepgram', tag: 'Realtime WS' },
                 { id: 'groq', label: 'Groq Cloud', tag: 'Whisper Turbo' },
                 { id: 'gemini', label: 'Gemini', tag: 'Gratis' },
                 { id: 'openai', label: 'OpenAI', tag: 'GPT' },
@@ -204,7 +214,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           <div className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700 rounded-xl text-xs text-slate-600 dark:text-slate-300">
             <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <span>
-              Model otomatis di-set ke opsi tercepat & terakurat (<strong>{provider === 'groq' ? 'Whisper Large v3 Turbo & LLaMA 3.3 70B' : provider === 'gemini' ? 'Gemini 1.5 Flash' : 'GPT-4o Mini & Whisper'}</strong>).
+              Model otomatis di-set ke opsi tercepat & terakurat (<strong>{provider === 'deepgram' ? 'Deepgram Nova-2 WebSocket Realtime' : provider === 'groq' ? 'Whisper Large v3 Turbo & LLaMA 3.3 70B' : provider === 'gemini' ? 'Gemini 1.5 Flash' : 'GPT-4o Mini & Whisper'}</strong>).
             </span>
           </div>
 
